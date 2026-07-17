@@ -2993,9 +2993,11 @@ function outlookBody(item) {
     enabledBlocks.forEach((b, idx) => {
       if (b.type === 'text') {
         const hasAccent = b.bgColor && b.bgColor !== 'transparent' && b.bgColor !== '#ffffff' && b.bgColor !== 'white' && b.bgColor !== '';
-        const blockFontFamily = b.fontFamily && b.fontFamily !== 'Inter' ? `font-family:${b.fontFamily},Arial,sans-serif;` : '';
-        const blockFontSize = b.fontSize && b.fontSize !== 10 ? `font-size:${Math.round(b.fontSize * 1.333)}px;` : '';
-        const blockTextColor = b.textColor && b.textColor !== '#1a1a1a' ? `color:${b.textColor};` : '';
+        // Only use block-level font overrides when explicitly set to something non-default
+        // Otherwise inherit global typography
+        const blockFontFamily = (b.fontFamily && b.fontFamily !== 'Inter' && b.fontFamily !== 'Arial') ? b.fontFamily : '';
+        const blockFontSize = (b.fontSize && b.fontSize !== 10 && b.fontSize !== 13) ? `${Math.round(b.fontSize * 1.333)}px` : '';
+        const blockTextColor = (b.textColor && b.textColor !== '#1a1a1a' && b.textColor !== '#1A1A1A') ? b.textColor : '';
 
         const divider = idx > 0
           ? `<div style="border-top:0.5px solid #F0F0F0;margin:14px 0 12px;"></div>`
@@ -3006,12 +3008,18 @@ function outlookBody(item) {
           ? `<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:${labelColor};">${b.label}</p>`
           : '';
 
-        const innerHtml = blockToOutlookHtml(b.content || '', blockFontFamily, blockFontSize, blockTextColor);
+        const innerHtml = blockToOutlookHtml(
+          b.content || '',
+          blockFontFamily ? `${blockFontFamily},Arial,sans-serif` : '',
+          blockFontSize,
+          blockTextColor
+        );
 
-        // All blocks get same padding — accent blocks get tinted background fill
+        // All blocks: flat layout, no padding/inset by default
+        // Only accent-coloured blocks get a tinted background — no extra inset vs surrounding text
         if (hasAccent) {
           const tintBg = b.bgColor || '#EDF7F7';
-          bodyParas += `${divider}<div style="background:${tintBg};border-radius:6px;padding:14px 16px;">${label}${innerHtml}</div>`;
+          bodyParas += `${divider}<div style="background:${tintBg};border-radius:4px;padding:0;">${label}${innerHtml}</div>`;
         } else {
           bodyParas += `${divider}${label}${innerHtml}`;
         }
@@ -6633,20 +6641,22 @@ function renderCaseModalFields(journeyId) {
     var i = 0;
     while (i < sectionFields.length) {
       var f = sectionFields[i];
+      var wrapOpen = '<div id="cf_wrap_' + f.id + '">';
+      var wrapClose = '</div>';
       if (f.width === 'full') {
-        html += '<div class="form-field" style="margin-bottom:8px;">' + renderCfFieldInput(f) + '</div>';
+        html += wrapOpen + '<div class="form-field" style="margin-bottom:8px;">' + renderCfFieldInput(f) + '</div>' + wrapClose;
         i++;
       } else {
-        // Check if next is also half
         var next = sectionFields[i+1];
         if (next && next.width !== 'full') {
+          var wrapOpenNext = '<div id="cf_wrap_' + next.id + '">';
           html += '<div class="form-row">';
-          html += '<div class="form-field">' + renderCfFieldInput(f) + '</div>';
-          html += '<div class="form-field">' + renderCfFieldInput(next) + '</div>';
+          html += wrapOpen + '<div class="form-field">' + renderCfFieldInput(f) + '</div>' + wrapClose;
+          html += wrapOpenNext + '<div class="form-field">' + renderCfFieldInput(next) + '</div>' + wrapClose;
           html += '</div>';
           i += 2;
         } else {
-          html += '<div class="form-field" style="margin-bottom:8px;">' + renderCfFieldInput(f) + '</div>';
+          html += wrapOpen + '<div class="form-field" style="margin-bottom:8px;">' + renderCfFieldInput(f) + '</div>' + wrapClose;
           i++;
         }
       }
@@ -6654,6 +6664,9 @@ function renderCaseModalFields(journeyId) {
   });
 
   container.innerHTML = html;
+
+  // Apply cascading field rules
+  setTimeout(function() { applyCascadingRules(journeyId); }, 0);
 
   // Populate location select
   var locSel = document.getElementById('caseLocationSelect');
@@ -6710,12 +6723,19 @@ function renderCfFieldInput(f) {
     case 'multiselect':
       var cbs = (f.options||[]).map(function(o){return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-bottom:3px;"><input type="checkbox" value="'+o+'" class="cfms_'+f.id+'"> '+o+'</label>';}).join('');
       return label + '<div style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">' + cbs + '</div>';
+    case 'checklist':
+      var items = (f.options||[]).map(function(o, i) {
+        return '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer;font-size:13px;">'
+          + '<input type="checkbox" id="cf_input_' + f.id + '_' + i + '" value="' + o + '" style="width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;"> '
+          + '<span>' + o + '</span></label>';
+      }).join('');
+      return label + '<div style="border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;background:white;">' + items + '</div>'
+        + '<div id="cf_checklist_progress_' + f.id + '" style="font-size:10.5px;color:var(--text3);margin-top:4px;"></div>';
     default:
       return label + '<input id="cf_input_' + f.id + '" placeholder="' + (f.placeholder||'') + '">';
   }
 }
 
-// Read all dynamic field values from the form
 function getCaseFormValues(journeyId) {
   var fields = getCaseFormForJourney(journeyId);
   var values = {};
@@ -6729,7 +6749,14 @@ function getCaseFormValues(journeyId) {
       return;
     }
     var val = '';
-    if (f.type === 'multiselect') {
+    if (f.type === 'checklist') {
+      var checked = [];
+      (f.options||[]).forEach(function(o, i) {
+        var cb = document.getElementById('cf_input_' + f.id + '_' + i);
+        if (cb && cb.checked) checked.push(o);
+      });
+      val = checked.join(', ');
+    } else if (f.type === 'multiselect') {
       var cbs = document.querySelectorAll('.cfms_' + f.id + ':checked');
       val = Array.from(cbs).map(function(cb){return cb.value;}).join(', ');
     } else if (f.type === 'yesno') {
@@ -6754,7 +6781,24 @@ function getCaseFormValues(journeyId) {
   return values;
 }
 
-// Validate required fields — returns array of missing field labels
+function applyCascadingRules(journeyId) {
+  var fields = getCaseFormForJourney(journeyId);
+  fields.forEach(function(f) {
+    if (!f.showIf) return;
+    var wrapper = document.getElementById('cf_wrap_' + f.id);
+    if (!wrapper) return;
+    var parentEl = document.getElementById('cf_input_' + f.showIf.fieldId)
+      || document.querySelector('select[id="cf_input_' + f.showIf.fieldId + '"]');
+    if (!parentEl) return;
+    var check = function() {
+      var val = parentEl.value || '';
+      var show = f.showIf.values ? f.showIf.values.includes(val) : val === f.showIf.value;
+      wrapper.style.display = show ? '' : 'none';
+    };
+    parentEl.addEventListener('change', check);
+    check(); // initial state
+  });
+}
 function validateCaseForm(journeyId) {
   var fields = getCaseFormForJourney(journeyId);
   var missing = [];
@@ -7418,6 +7462,10 @@ function fbPreviewField(f, rowIdx, journeyId) {
       var msOpts = (f.options||[]).slice(0,3).map(function(o){return '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);"><input type="checkbox" disabled> '+o+'</label>';}).join('');
       var more = (f.options||[]).length > 3 ? '<div style="font-size:10.5px;color:var(--text3);">+' + ((f.options||[]).length - 3) + ' more…</div>' : '';
       inputHtml = '<div style="padding:6px 8px;background:#FAFBFC;border:1px solid var(--border);border-radius:var(--r-sm);display:flex;flex-direction:column;gap:2px;">' + msOpts + more + '</div>'; break;
+    case 'checklist':
+      var clOpts = (f.options||[]).slice(0,4).map(function(o){return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;color:var(--text2);"><input type="checkbox" disabled style="accent-color:var(--teal);"> '+o+'</div>';}).join('');
+      var clMore = (f.options||[]).length > 4 ? '<div style="font-size:10.5px;color:var(--text3);">+'+(f.options.length-4)+' more…</div>' : '';
+      inputHtml = '<div style="padding:6px 8px;background:#FAFBFC;border:1px solid var(--border);border-radius:var(--r-sm);">' + clOpts + clMore + '</div>'; break;
     case 'location':
       inputHtml = '<select disabled style="width:100%;box-sizing:border-box;background:#FAFBFC;cursor:pointer;"><option>— Select office location —</option></select>'; break;
     default:
@@ -7495,7 +7543,18 @@ function fbEdit(journeyId, idx) {
     + '<select id="fbEditSection" style="width:100%;">' + sections.map(function(s){ return '<option ' + (s===r.section?'selected':'') + '>' + s + '</option>'; }).join('') + '</select></div>'
     + '<div class="form-field" style="margin-bottom:10px;"><label>Width</label>'
     + '<select id="fbEditWidth" style="width:100%;"><option value="half" ' + (r.width!=='full'?'selected':'') + '>Half (side by side)</option><option value="full" ' + (r.width==='full'?'selected':'') + '>Full width</option></select></div>'
-    + '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px;cursor:pointer;"><input type="checkbox" id="fbEditRequired" ' + (r.required?'checked':'') + ' style="accent-color:var(--teal);"> Required — blocks saving if empty</label>'
+    + '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px;cursor:pointer;"><input type="checkbox" id="fbEditRequired" ' + (r.required?'checked':'') + ' style="accent-color:var(--teal);"> Required — blocks saving if empty</label>'
+    + '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:14px;">'
+    + '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">Cascading — show only when</div>'
+    + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">'
+    + '<select id="fbShowIfField" style="flex:1;font-size:12px;"><option value="">Always show</option>'
+    + getJourneyForm(journeyId).filter(function(jr){ return jr.fid !== r.fid; }).map(function(jr) { var def=(getCaseFieldLib().find(function(f){return f.id===jr.fid;})||{}); return def.label ? '<option value="'+jr.fid+'" '+(r.showIf&&r.showIf.fieldId===jr.fid?'selected':'')+'>'+def.label+'</option>' : ''; }).join('')
+    + '</select>'
+    + '<span style="font-size:12px;color:var(--text3);">equals</span>'
+    + '<input id="fbShowIfValue" placeholder="value" style="flex:1;font-size:12px;" value="' + (r.showIf ? (r.showIf.value||(r.showIf.values||[]).join(', ')||'') : '') + '">'
+    + '</div>'
+    + '<div style="font-size:10.5px;color:var(--text3);">Leave parent as "Always show" to display regardless. Enter the exact option value that triggers this field to appear.</div>'
+    + '</div>'
     + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px;">Label, type and options are defined in the <a href="#" onclick="document.getElementById(\'_fbEditPanel\').remove();settingsSection=\'caseFields\';renderSettings();return false;" style="color:var(--teal);">Case Fields library</a>.</div>'
     + '<div style="display:flex;justify-content:flex-end;gap:8px;">'
     + '<button class="btn" onclick="document.getElementById(\'_fbEditPanel\').remove()">Cancel</button>'
@@ -7507,6 +7566,15 @@ function fbSaveEdit(journeyId, idx) {
   rows[idx].section = document.getElementById('fbEditSection').value;
   rows[idx].width = document.getElementById('fbEditWidth').value;
   rows[idx].required = document.getElementById('fbEditRequired').checked;
+  // Save cascading showIf
+  var parentField = document.getElementById('fbShowIfField').value;
+  var parentValue = (document.getElementById('fbShowIfValue').value||'').trim();
+  if (parentField && parentValue) {
+    var vals = parentValue.split(',').map(function(v){return v.trim();}).filter(Boolean);
+    rows[idx].showIf = { fieldId: parentField, value: vals.length===1?vals[0]:null, values: vals.length>1?vals:null };
+  } else {
+    delete rows[idx].showIf;
+  }
   saveJourneyForm(journeyId, rows);
   document.getElementById('_fbEditPanel').remove();
   renderSettingsSection();
@@ -7519,7 +7587,7 @@ function fbOpenPicker(journeyId, section) {
   var available = lib.filter(function(f){ return usedIds.indexOf(f.id) === -1; });
 
   document.getElementById('_fbPicker') && document.getElementById('_fbPicker').remove();
-  var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',location:'Location'};
+  var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',location:'Location'};
   var picker = document.createElement('div');
   picker.id = '_fbPicker';
   picker.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);z-index:9999;width:440px;max-height:80vh;display:flex;flex-direction:column;padding:20px;';
@@ -9659,7 +9727,7 @@ function renderSettingsSection() {
   if (settingsSection === 'customFields') { settingsSection = 'caseFields'; }
   if (settingsSection === 'caseFields') {
     var lib = getFieldLib();
-    var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',location:'Location'};
+    var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',location:'Location'};
     // Group fields
     var groups = [];
     lib.forEach(function(f){ var g=f.group||'General'; if(groups.indexOf(g)===-1) groups.push(g); });
@@ -9702,6 +9770,7 @@ function renderSettingsSection() {
               <option value="yesno">Yes / No</option>
               <option value="select">Single Select</option>
               <option value="multiselect">Multi-Select</option>
+              <option value="checklist">Checklist (tick-off tasks)</option>
               <option value="location">Office Location</option>
             </select>
           </div>
