@@ -2052,7 +2052,12 @@ async function loadFromFirestore() {
     if (leg) { data.legislation = leg; localStorage.setItem('er_au_leg', JSON.stringify(leg)); changed = true; }
     if (res) { resources = res; localStorage.setItem('er_resources', JSON.stringify(res)); changed = true; }
     const settings = await fsGet('settings');
-    if (settings) { appSettings = { ...DEFAULT_SETTINGS, ...settings }; localStorage.setItem('er_settings', JSON.stringify(appSettings)); changed = true; }
+    if (settings && typeof settings === 'object') {
+      // Deep merge — preserve all keys from Firebase, fill gaps with defaults
+      appSettings = { ...DEFAULT_SETTINGS, ...appSettings, ...settings };
+      localStorage.setItem('er_settings', JSON.stringify(appSettings));
+      changed = true;
+    }
     const pipeline = await fsGet('pipeline');
     if (pipeline) { savePipeline(pipeline); changed = true; }
     const customJ = await fsGet('customJourneys');
@@ -2993,11 +2998,12 @@ function outlookBody(item) {
     enabledBlocks.forEach((b, idx) => {
       if (b.type === 'text') {
         const hasAccent = b.bgColor && b.bgColor !== 'transparent' && b.bgColor !== '#ffffff' && b.bgColor !== 'white' && b.bgColor !== '';
-        // Only use block-level font overrides when explicitly set to something non-default
-        // Otherwise inherit global typography
-        const blockFontFamily = (b.fontFamily && b.fontFamily !== 'Inter' && b.fontFamily !== 'Arial') ? b.fontFamily : '';
-        const blockFontSize = (b.fontSize && b.fontSize !== 10 && b.fontSize !== 13) ? `${Math.round(b.fontSize * 1.333)}px` : '';
-        const blockTextColor = (b.textColor && b.textColor !== '#1a1a1a' && b.textColor !== '#1A1A1A') ? b.textColor : '';
+        // Block-level font override: only apply if explicitly set AND different from global
+        const T = getTypography();
+        const globalFont = T.fontFamily;
+        const blockFontFamily = (b.fontFamily && b.fontFamily !== 'Inter' && b.fontFamily !== globalFont) ? b.fontFamily : '';
+        const blockFontSize = (b.fontSize && b.fontSize > 0 && b.fontSize !== 10) ? `${Math.round(b.fontSize * 1.333)}px` : '';
+        const blockTextColor = (b.textColor && b.textColor !== '#1a1a1a' && b.textColor !== '#1A1A1A' && b.textColor !== '') ? b.textColor : '';
 
         const divider = idx > 0
           ? `<div style="border-top:0.5px solid #F0F0F0;margin:14px 0 12px;"></div>`
@@ -3019,7 +3025,7 @@ function outlookBody(item) {
         // Only accent-coloured blocks get a tinted background — no extra inset vs surrounding text
         if (hasAccent) {
           const tintBg = b.bgColor || '#EDF7F7';
-          bodyParas += `${divider}<div style="background:${tintBg};border-radius:4px;padding:0;">${label}${innerHtml}</div>`;
+          bodyParas += `${divider}<div style="background:${tintBg};border-radius:6px;padding:16px 20px;">${label}${innerHtml}</div>`;
         } else {
           bodyParas += `${divider}${label}${innerHtml}`;
         }
@@ -4330,10 +4336,10 @@ function renderTemplateFields(itemId) {
 }
 // ── GLOBAL TYPOGRAPHY ────────────────────────────────────────────────────
 function getTypography() {
-  var t = (window.appSettings || {}).typography || {};
+  var t = (appSettings && appSettings.typography) ? appSettings.typography : {};
   return {
     fontFamily:   t.fontFamily   || 'Arial',
-    fontSize:     t.fontSize     || '13',
+    fontSize:     t.fontSize     || '14',
     lineHeight:   t.lineHeight   || '1.75',
     bodyColor:    t.bodyColor    || '#1A1A1A',
     headingColor: t.headingColor || '#1A6B6B',
@@ -8213,6 +8219,52 @@ function renderLcJourney() {
     </div>`;
 }
 
+// ── CASE DATA VIEW ─────────────────────────────────────────────────────────
+function renderCaseDataView(c) {
+  if (!c) return '';
+  var fields = getCaseFormForJourney(c.journeyId);
+  var dynValues = c._dynValues || {};
+  var sections = [];
+  fields.forEach(function(f) { if (f.enabled !== false && sections.indexOf(f.section) === -1) sections.push(f.section); });
+
+  if (!fields.length && !Object.keys(dynValues).length) {
+    return '<div style="font-size:12px;color:var(--text3);font-style:italic;">No form data saved for this case.</div>';
+  }
+
+  var html = '';
+  sections.forEach(function(sec) {
+    var secFields = fields.filter(function(f){ return f.section === sec && f.enabled !== false; });
+    if (!secFields.length) return;
+
+    var secHtml = '';
+    secFields.forEach(function(f) {
+      // Get value — try dynValues by ID, then by label, then legacy props
+      var val = dynValues[f.id] || dynValues[f.label] || dynValues[f.label.toUpperCase()] || '';
+      if (!val && f.id === 'cf_employee') val = c.employee || '';
+      if (!val && f.id === 'cf_preferred') val = c.preferred || '';
+      if (!val && f.id === 'cf_position') val = c.position || '';
+      if (!val && f.id === 'cf_emptype') val = c.empType || '';
+      if (!val && f.id === 'cf_start') val = c.startDate || '';
+      if (!val && f.id === 'cf_manager') val = c.manager || '';
+      if (!val) return; // skip empty
+
+      secHtml += '<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--bg);">'
+        + '<span style="font-size:11px;color:var(--text3);min-width:110px;flex-shrink:0;padding-top:1px;">' + f.label + '</span>'
+        + '<span style="font-size:12.5px;color:var(--text);font-weight:500;flex:1;">' + val + '</span>'
+        + '</div>';
+    });
+
+    if (secHtml) {
+      html += '<div style="margin-bottom:12px;">'
+        + '<div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:6px;">' + sec + '</div>'
+        + secHtml
+        + '</div>';
+    }
+  });
+
+  return html || '<div style="font-size:12px;color:var(--text3);font-style:italic;">Fill in the case form to see data here.</div>';
+}
+
 function openCase(caseId) {
   lcView = 'case'; lcCaseId = caseId;
   const cases = loadCases();
@@ -8275,16 +8327,12 @@ function renderLcCase() {
             </button>`;
           }).join('')}
         </div>
-        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text2);">
-          ${c.startDate?`<div>Start: <strong>${c.startDate}</strong>${c.endDate?' → '+c.endDate:''}</div>`:''}
-          ${c.empType?`<div>${c.empType}</div>`:''}
-          ${c.hours?`<div>${c.hours} hrs/week${c.schedule?' · '+c.schedule:''}</div>`:''}
-          ${c.award?`<div style="font-size:11px;color:var(--text3);">${c.award}</div>`:''}
-          ${c.manager?`<div>Manager: <strong>${c.manager}</strong></div>`:''}
-          ${c.hrbp?`<div>HRBP: ${c.hrbp}</div>`:''}
-          ${c.probation?`<div>Probation: ${c.probation}</div>`:''}
-          ${c.payrollId?`<div style="font-size:11px;color:var(--text3);">ID: ${c.payrollId}</div>`:''}
-          ${c.notes?`<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-style:italic;color:var(--text3);">${c.notes}</div>`:''}
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);">Case Details</div>
+            <button class="btn btn-sm" onclick="openEditCase('${c.id}')">✎ Edit</button>
+          </div>
+          ${renderCaseDataView(c)}
         </div>
       </div>
       <div>
@@ -9584,12 +9632,17 @@ var DEFAULT_SETTINGS = {
 function loadSettings() {
   try {
     const s = localStorage.getItem('er_settings');
-    return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : { ...DEFAULT_SETTINGS };
-  } catch(e) { return { ...DEFAULT_SETTINGS }; }
+    if (!s || s === 'undefined' || s === 'null') return { ...DEFAULT_SETTINGS };
+    const parsed = JSON.parse(s);
+    // Merge: defaults provide missing keys, stored values take precedence for everything else
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch(e) { console.warn('loadSettings error:', e); return { ...DEFAULT_SETTINGS }; }
 }
 function saveSettings(s) {
-  localStorage.setItem('er_settings', JSON.stringify(s));
-  fsSet('settings', 'main', s);
+  var toSave = (s !== undefined && s !== null) ? s : appSettings;
+  if (!toSave || typeof toSave !== 'object') { console.warn('saveSettings: nothing to save'); return; }
+  localStorage.setItem('er_settings', JSON.stringify(toSave));
+  fsSet('settings', 'main', toSave);
 }
 
 var appSettings = loadSettings();
