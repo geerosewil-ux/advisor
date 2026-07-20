@@ -2726,7 +2726,20 @@ function renderTemplate(item) {
           <!-- Toolbar -->
           <div style="border-bottom:1px solid var(--border);background:#FAFBFC;">
 
-            <!-- Subject row -->
+            <!-- Editable org header row -->
+            ${item.format === 'email' || !item.format ? `
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 16px;border-bottom:1px solid var(--border);background:#F0FAF9;">
+              <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--teal);flex-shrink:0;">Header</span>
+              <input id="liveOrgName" value="${appSettings.orgName||''}"
+                oninput="appSettings.orgName=this.value;saveSettings();updatePreview('${item.id}')"
+                style="flex:1;min-width:0;border:none;background:transparent;font-family:inherit;font-size:12px;font-weight:600;color:var(--text);outline:none;" placeholder="Organisation name…">
+              <span style="font-size:9.5px;color:var(--text3);">Accent</span>
+              <input type="color" value="${appSettings.docColours?.accentLine||appSettings.accentColour||'#1A6B6B'}"
+                title="Accent colour"
+                style="width:24px;height:24px;border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:1px;flex-shrink:0;"
+                oninput="if(!appSettings.docColours)appSettings.docColours={};appSettings.docColours.accentLine=this.value;saveSettings();updatePreview('${item.id}')">
+            </div>` : ''}
+
             <!-- To row (email only) -->
             ${item.format === 'email' || !item.format ? `
             <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);">
@@ -2756,6 +2769,10 @@ function renderTemplate(item) {
                 <svg viewBox="0 0 24 24" style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                 Library
               </button>
+              <button class="btn btn-sm btn-ghost" onclick="toggleInternalPanel('${item.id}')" id="internalPanelToggle" title="Internal checklist / notes">
+                <svg viewBox="0 0 24 24" style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                Internal
+              </button>
               <div style="flex:1;"></div>
               <button class="btn btn-sm btn-ghost" onclick="openWizard('${item.id}')">
                 <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -2772,8 +2789,29 @@ function renderTemplate(item) {
             </div>
           </div>
 
-          <!-- Preview -->
-          <div id="outputPreview" style="padding:20px;overflow-x:auto;background:#F8F9FA;"></div>
+          <!-- Preview + Internal panel side by side -->
+          <div style="display:flex;gap:0;min-height:0;">
+            <div id="outputPreview" style="flex:1;padding:20px;overflow-x:auto;background:#F8F9FA;min-width:0;"></div>
+
+            <!-- Internal checklist / notes panel — hidden by default -->
+            <div id="internalPanel" style="display:none;width:280px;flex-shrink:0;border-left:1px solid var(--border);background:white;padding:14px;overflow-y:auto;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);">Internal Notes</div>
+                <button onclick="toggleInternalPanel('${item.id}')" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:16px;padding:0;">&times;</button>
+              </div>
+              <div style="font-size:11.5px;color:var(--text2);margin-bottom:12px;line-height:1.5;">Checklist and notes for your own reference. Not included in the sent email.</div>
+              <div id="internalChecklist" style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px;">${renderInternalChecklist(item.id)}</div>
+              <div style="display:flex;gap:6px;margin-bottom:12px;">
+                <input id="newChecklistItem" placeholder="Add checklist item…" style="flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;font-size:12px;" onkeydown="if(event.key==='Enter')addInternalChecklistItem('${item.id}')">
+                <button class="btn btn-sm" onclick="addInternalChecklistItem('${item.id}')">Add</button>
+              </div>
+              <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin-bottom:8px;">Notes</div>
+                <textarea id="internalNotes" rows="6" placeholder="Internal notes…" style="width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;font-size:12.5px;border:1px solid var(--border);border-radius:var(--r-sm);padding:6px 8px;"
+                  oninput="saveInternalNotes('${item.id}',this.value)">${getInternalNotes(item.id)}</textarea>
+              </div>
+            </div>
+          </div>
 
         </div>
       </div>
@@ -2868,20 +2906,20 @@ function outlookBody(item) {
   }
 
   function resolvePh(kt, mod) {
-    // 1. Check direct stored values first (PRONOUN/SUBJECT may be pre-stored by setPronounSet)
-    var direct = fieldValues[kt] ?? fieldValues[kt.toUpperCase()] ?? fieldValues[kt.toLowerCase()];
+    // Try uppercase first (that's what we store under), then exact, then lowercase
+    var direct = fieldValues[kt.toUpperCase()] ?? fieldValues[kt] ?? fieldValues[kt.toLowerCase()];
     if (direct !== undefined && direct !== null && direct !== '') {
       var sv = Array.isArray(direct) ? direct.join(', ') : String(direct);
       if (/^\d{4}-\d{2}-\d{2}$/.test(sv.trim())) sv = formatDateValue(sv.trim());
       return applyModifier(sv, mod);
     }
-    // 2. Pronoun tags — resolve from set
+    // Pronoun tags — resolve from set
     const pmap = PRONOUN_TAG_MAP[kt.toUpperCase()];
     if (pmap) {
       const ps = getPronouns();
       if (ps) return applyModifier(ps[pmap], mod);
     }
-    return null; // miss
+    return null;
   }
 
   function fillPh(str) {
@@ -4334,7 +4372,65 @@ function renderTemplateFields(itemId) {
   renderFieldProfilesBar(itemId);
   updatePreview(itemId);
 }
-// ── GLOBAL TYPOGRAPHY ────────────────────────────────────────────────────
+// ── INTERNAL CHECKLIST / NOTES ────────────────────────────────────────────
+function getInternalData(tplId) {
+  try { return JSON.parse(localStorage.getItem('er_internal_' + tplId) || '{"items":[],"notes":""}'); }
+  catch(e) { return {items:[], notes:''}; }
+}
+function saveInternalData(tplId, data) {
+  localStorage.setItem('er_internal_' + tplId, JSON.stringify(data));
+}
+function getInternalNotes(tplId) {
+  return getInternalData(tplId).notes || '';
+}
+function saveInternalNotes(tplId, val) {
+  var d = getInternalData(tplId); d.notes = val; saveInternalData(tplId, d);
+}
+function renderInternalChecklist(tplId) {
+  var d = getInternalData(tplId);
+  if (!d.items.length) return '<div style="font-size:11.5px;color:var(--text3);font-style:italic;">No items yet.</div>';
+  return d.items.map(function(item, i) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">'
+      + '<input type="checkbox" ' + (item.done?'checked':'') + ' style="accent-color:var(--teal);width:15px;height:15px;flex-shrink:0;" '
+      + 'onchange="toggleInternalItem(\'' + tplId + '\',' + i + ',this.checked)">'
+      + '<span style="flex:1;font-size:12.5px;color:var(--text);' + (item.done?'text-decoration:line-through;color:var(--text3);':'') + '">' + item.text + '</span>'
+      + '<button onclick="removeInternalItem(\'' + tplId + '\',' + i + ')" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:14px;padding:0 2px;line-height:1;">&times;</button>'
+      + '</div>';
+  }).join('');
+}
+function addInternalChecklistItem(tplId) {
+  var inp = document.getElementById('newChecklistItem');
+  var text = inp ? inp.value.trim() : '';
+  if (!text) return;
+  var d = getInternalData(tplId);
+  d.items.push({text: text, done: false});
+  saveInternalData(tplId, d);
+  if (inp) inp.value = '';
+  var cl = document.getElementById('internalChecklist');
+  if (cl) cl.innerHTML = renderInternalChecklist(tplId);
+}
+function toggleInternalItem(tplId, idx, done) {
+  var d = getInternalData(tplId);
+  if (d.items[idx]) d.items[idx].done = done;
+  saveInternalData(tplId, d);
+  var cl = document.getElementById('internalChecklist');
+  if (cl) cl.innerHTML = renderInternalChecklist(tplId);
+}
+function removeInternalItem(tplId, idx) {
+  var d = getInternalData(tplId);
+  d.items.splice(idx, 1);
+  saveInternalData(tplId, d);
+  var cl = document.getElementById('internalChecklist');
+  if (cl) cl.innerHTML = renderInternalChecklist(tplId);
+}
+function toggleInternalPanel(tplId) {
+  var panel = document.getElementById('internalPanel');
+  var btn = document.getElementById('internalPanelToggle');
+  if (!panel) return;
+  var open = panel.style.display === 'none' || !panel.style.display;
+  panel.style.display = open ? 'block' : 'none';
+  if (btn) btn.style.background = open ? 'var(--teal-lt)' : '';
+}
 function getTypography() {
   var t = (appSettings && appSettings.typography) ? appSettings.typography : {};
   return {
@@ -4437,6 +4533,19 @@ function isPronounField(f) {
 
 function ensurePronounField() {
   var lib = getFieldLib();
+  // Remove ALL duplicate pronoun entries (fl_, cf_, pf_ variants)
+  var pronounEntries = lib.filter(function(f){ return isPronounField(f.label); });
+  if (pronounEntries.length > 1) {
+    // Keep only the first, remove the rest
+    var kept = false;
+    appSettings.fieldLib = lib.filter(function(f){
+      if (!isPronounField(f.label)) return true;
+      if (!kept) { kept = true; return true; }
+      return false;
+    });
+    saveFieldLib(appSettings.fieldLib);
+    lib = appSettings.fieldLib;
+  }
   if (!lib.find(function(f){ return isPronounField(f.label); })) {
     lib.unshift({ id:'fl_pronouns', label:'Pronouns', group:'Employee', type:'select',
       options: Object.keys(PRONOUN_SETS).concat(['Custom']), placeholder:'', width:'half' });
@@ -4539,11 +4648,10 @@ function formatDateTimeValue(dateStr, timeStr) {
 function setDateField(fieldKey, dateVal, isDateTime, itemId) {
   fieldValues['__raw_' + fieldKey] = dateVal;
   const timeVal = fieldValues['__time_' + fieldKey] || '';
-  fieldValues[fieldKey] = isDateTime
-    ? formatDateTimeValue(dateVal, timeVal)
-    : formatDateValue(dateVal);
+  const formatted = isDateTime ? formatDateTimeValue(dateVal, timeVal) : formatDateValue(dateVal);
+  fieldValues[fieldKey] = formatted;
+  fieldValues[fieldKey.toUpperCase()] = formatted;
   updatePreview(itemId);
-  // Re-render fields to show formatted value
   const item = data.templates.find(i=>i.id===itemId);
   if (item) renderTemplate(item);
 }
@@ -4551,7 +4659,9 @@ function setDateField(fieldKey, dateVal, isDateTime, itemId) {
 function setTimeField(fieldKey, timeVal, itemId) {
   fieldValues['__time_' + fieldKey] = timeVal;
   const dateVal = fieldValues['__raw_' + fieldKey] || '';
-  fieldValues[fieldKey] = formatDateTimeValue(dateVal, timeVal);
+  const formatted = formatDateTimeValue(dateVal, timeVal);
+  fieldValues[fieldKey] = formatted;
+  fieldValues[fieldKey.toUpperCase()] = formatted;
   updatePreview(itemId);
   const item = data.templates.find(i=>i.id===itemId);
   if (item) renderTemplate(item);
@@ -6323,24 +6433,24 @@ function renderFillField(f, fieldValues, itemId) {
   }
   if (fieldType === 'select' && cfDef?.options?.length) {
     return `<div class="field-group"><div class="field-lbl">${f}</div>
-      <select class="field-input" onchange="fieldValues['${fSafe}']=this.value;updatePreview('${itemId}')">
+      <select class="field-input" onchange="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;${isPronounField(f)?`setPronounSet(this.value,'${itemId}');`:''}updatePreview('${itemId}')">
         <option value="">— Select —</option>
-        ${cfDef.options.map(o=>`<option value="${o}" ${fieldValues[f]===o?'selected':''}>${o}</option>`).join('')}
+        ${cfDef.options.map(o=>`<option value="${o}" ${fieldValues[f]===o||fieldValues[fSafe.toUpperCase()]===o?'selected':''}>${o}</option>`).join('')}
       </select></div>`;
   }
   if (fieldType === 'multiselect' && cfDef?.options?.length) {
-    const selected = (fieldValues[f]||'').split(', ').filter(Boolean);
+    const selected = typeof fieldValues[f] === 'string' ? fieldValues[f].split(', ').filter(Boolean) : (fieldValues[f]||[]);
     return `<div class="field-group"><div class="field-lbl">${f}</div>
       <div style="display:flex;flex-direction:column;gap:3px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">
         ${cfDef.options.map(o=>`<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;">
           <input type="checkbox" ${selected.includes(o)?'checked':''} style="accent-color:var(--teal);"
-            onchange="(function(){var sel=[...document.querySelectorAll('#fillField_${fSafe.replace(/[^a-z0-9]/gi,'_')} input:checked')].map(cb=>cb.dataset.val);fieldValues['${fSafe}']=sel.join(', ');updatePreview('${itemId}');})()" data-val="${o}" id="fillField_${fSafe.replace(/[^a-z0-9]/gi,'_')}">
+            onchange="(function(){var sel=[...document.querySelectorAll('.msFill_${fSafe.replace(/[^a-z0-9]/gi,'_')} input:checked')].map(cb=>cb.value);var joined=sel.join(', ');fieldValues['${fSafe}']=joined;fieldValues['${fSafe.toUpperCase()}']=joined;updatePreview('${itemId}');})()" class="msFill_${fSafe.replace(/[^a-z0-9]/gi,'_')}">
           ${o}</label>`).join('')}
       </div></div>`;
   }
-  // Default: text input
+  // Default: text input — store under both original case and uppercase
   return `<div class="field-group"><div class="field-lbl">${f}</div>
-    <input class="field-input" placeholder="${f}" value="${(fieldValues[f]||'').replace(/"/g,'&quot;')}" oninput="fieldValues['${fSafe}']=this.value;updatePreview('${itemId}')"></div>`;
+    <input class="field-input" placeholder="${f}" value="${(fieldValues[f]||fieldValues[f.toUpperCase()]||'').replace(/"/g,'&quot;')}" oninput="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;updatePreview('${itemId}')"></div>`;
 }
 
 // ── CASE FORM EDITOR FUNCTIONS ────────────────────────────────────────────
@@ -6776,13 +6886,8 @@ function getCaseFormValues(journeyId) {
     } else {
       val = document.getElementById('cf_input_' + f.id)?.value?.trim() || '';
     }
-    // Store by field ID
+    // Store ONLY by field ID — the openPackageModal mapping resolves to labels
     values[f.id] = val;
-    // ALSO store by label (and uppercase label) so template {{PREFERRED NAME}} matches
-    if (f.label && val !== '') {
-      values[f.label] = val;
-      values[f.label.toUpperCase()] = val;
-    }
   });
   return values;
 }
@@ -7368,8 +7473,6 @@ var DEFAULT_CASE_FORM_BASE = [
   // Section: Employee Details
   { id:'cf_employee',       section:'Employee Details',    label:'Full Name',              placeholder:'e.g. Jane Smith',              type:'text',     width:'half', required:true,  enabled:true },
   { id:'cf_preferred',      section:'Employee Details',    label:'Preferred Name',         placeholder:'e.g. Jane',                    type:'text',     width:'half', required:false, enabled:true },
-  { id:'cf_pronouns',       section:'Employee Details',    label:'Pronouns',               placeholder:'',                             type:'select',   width:'half', required:false, enabled:true,
-    options:['She / Her','He / Him','They / Them','She / They','He / They','Custom'] },
   { id:'cf_position',       section:'Employee Details',    label:'Position Title',         placeholder:'e.g. Senior Analyst',          type:'text',     width:'half', required:false, enabled:true },
   { id:'cf_classification', section:'Employee Details',    label:'Classification / Grade', placeholder:'e.g. Level 4, APS6',          type:'text',     width:'half', required:false, enabled:true },
   { id:'cf_dept',           section:'Employee Details',    label:'Department / Team',      placeholder:'e.g. People & Culture',        type:'text',     width:'half', required:false, enabled:true },
@@ -7741,8 +7844,8 @@ function getFieldLib() {
     var addDef = function(f) {
       var label = f.label || f.name;
       if (!label) return;
-      var key = label.toLowerCase();
-      if (seen[key]) return;
+      var key = label.toLowerCase().trim();
+      if (seen[key]) return; // deduplicate by label
       seen[key] = true;
       lib.push({
         id: f.id || ('fl_' + label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')),
@@ -7754,7 +7857,7 @@ function getFieldLib() {
         width: f.width || 'half'
       });
     };
-    // Merge: old case field lib + old custom fields + defaults
+    // Merge sources — order matters for deduplication: custom fields win over defaults
     (appSettings.caseFieldLib || []).forEach(addDef);
     (appSettings.customFields || []).forEach(addDef);
     (appSettings.caseFormBase || DEFAULT_CASE_FORM_BASE).forEach(addDef);
@@ -7762,9 +7865,18 @@ function getFieldLib() {
     Object.keys(appSettings.caseFormByType||{}).forEach(function(j) {
       (appSettings.caseFormByType[j]||[]).forEach(addDef);
     });
+    // Do NOT seed from DEFAULT_PROFILE_FIELDS — those are profile-only fields
     appSettings.fieldLib = lib;
     saveSettings();
   }
+  // Also deduplicate in place if lib has grown duplicates
+  var seen2 = {};
+  appSettings.fieldLib = appSettings.fieldLib.filter(function(f) {
+    var key = (f.label||'').toLowerCase().trim();
+    if (!key || seen2[key]) return false;
+    seen2[key] = true;
+    return true;
+  });
   return appSettings.fieldLib;
 }
 function saveFieldLib(lib) { appSettings.fieldLib = lib; saveSettings(); }
@@ -7799,15 +7911,9 @@ function _oldGetCaseFieldLib() {
 function getJourneyForm(journeyId) {
   if (!appSettings.caseFormsByJourney) appSettings.caseFormsByJourney = {};
   var existing = appSettings.caseFormsByJourney[journeyId];
-  // Check if Pronouns is missing from an already-migrated form — force re-add
-  if (existing && existing.length && !existing.find(function(r){ return r.fid === 'cf_pronouns' || r.fid === 'fl_pronouns'; })) {
-    existing.splice(2, 0, { fid:'cf_pronouns', section:'Employee Details', required:false, width:'half', enabled:true });
-    appSettings.caseFormsByJourney[journeyId] = existing;
-    saveSettings();
-  }
   if (!existing || !existing.length) {
-    // Migrate: build composition from the old base + extras model
-    getCaseFieldLib(); // ensure library seeded first
+    // Migrate from old base + extras model
+    getCaseFieldLib();
     var base = appSettings.caseFormBase || DEFAULT_CASE_FORM_BASE;
     var extras = (appSettings.caseFormByType && appSettings.caseFormByType[journeyId]) || [];
     var rows = base.concat(extras).map(function(f) {
@@ -9067,13 +9173,9 @@ function openStepPackage(stepId, journeyId, stageId, caseId) {
       Object.keys(c._dynValues).forEach(fid => {
         const val = c._dynValues[fid];
         if (val === undefined || val === null || val === '') return;
-        // If fid looks like a label (contains spaces or mixed case) — store directly
-        if (fid.includes(' ') || /[A-Z]/.test(fid[0])) {
-          caseFields[fid.toUpperCase()] = val;
-          caseFields[fid] = val;
-          return;
-        }
-        // Try to find library def by ID (all prefix variants)
+        const formatted = Array.isArray(val) ? val.join(', ') : String(val);
+
+        // Find the field definition — try all ID prefix variants then label-derived
         let def = lib.find(f => f.id === fid);
         if (!def) {
           const stripped = fid.replace(/^(?:cf|fl|pf)_/, '');
@@ -9083,21 +9185,26 @@ function openStepPackage(stepId, journeyId, stageId, caseId) {
           const labelGuess = fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
           def = lib.find(f => f.label.toLowerCase() === labelGuess.toLowerCase());
         }
-        const label = def ? def.label : fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
-        const formatted = Array.isArray(val) ? val.join(', ') : String(val);
-        caseFields[label.toUpperCase()] = formatted;
-        caseFields[label] = formatted;
-        // Also store under the raw fid in case template uses it literally
-        caseFields[fid] = formatted;
 
-        // Auto-expand pronoun set so PRONOUN/SUBJECT etc. all resolve
-        if ((label === 'Pronouns' || fid === 'cf_pronouns' || fid === 'fl_pronouns') && PRONOUN_SETS[formatted]) {
+        // Derive the canonical label
+        const label = def ? def.label : fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
+
+        // Store under EVERY possible key a template might use
+        caseFields[label.toUpperCase()] = formatted;          // {{MANAGER NAME}}
+        caseFields[label] = formatted;                        // {{Manager Name}}
+        caseFields[fid] = formatted;                          // {{cf_manager}}
+        // Also store label with spaces as underscores (some templates may use this)
+        caseFields[label.toUpperCase().replace(/ /g, '_')] = formatted;
+
+        // Auto-expand pronoun set
+        if (isPronounField(label) && PRONOUN_SETS[formatted]) {
           const ps = PRONOUN_SETS[formatted];
           caseFields['PRONOUN/SUBJECT']    = ps.subject;
           caseFields['PRONOUN/OBJECT']     = ps.object;
           caseFields['PRONOUN/POSSESSIVE'] = ps.possessive;
           caseFields['PRONOUN/REFLEXIVE']  = ps.reflexive;
           caseFields['PRONOUN/TITLE']      = ps.title;
+          caseFields['Pronouns'] = formatted;
         }
       });
     }
@@ -9731,9 +9838,6 @@ function renderSettings() {
     { id:'dateFormat',      label:'Date Format' },
     { id:'empTypes',        label:'Employment Types' },
     { id:'classifications', label:'Classifications' },
-    { id:'awards',          label:'Awards & Agreements' },
-    { id:'hours',           label:'Hours Options' },
-    { id:'probation',       label:'Probation Periods' },
     { id:'approvalStatuses',label:'Approval Statuses' },
     { id:'categories',      label:'Categories' },
     { id:'dataio',          label:'Import / Export' },
