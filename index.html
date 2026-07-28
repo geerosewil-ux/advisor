@@ -2104,7 +2104,7 @@ var beActiveBlock = null;
 
 
 function loadData() {
-  function safeParse(key, fallback) {
+  var safeParse = function(key, fallback) {
     try {
       const v = localStorage.getItem(key);
       if (!v) return fallback;
@@ -2574,6 +2574,20 @@ function renderTemplate(item) {
   const fields = extractFields(item.body, item.blocks, item.subject);
   fields.forEach(f => { if (!fieldValues[f]) fieldValues[f] = ''; });
 
+  // If template uses any PRONOUN/ tags, inject a single Pronouns master field
+  const hasPronounTags = fields.some(f => /^PRONOUN\//i.test(f.split('|')[0].trim()) || isPronounField(f.split('|')[0].trim()));
+  const deduped = [];
+  let pronounInjected = false;
+  fields.forEach(function(f) {
+    const base = f.split('|')[0].trim();
+    if (/^PRONOUN\//i.test(base) || isPronounField(base)) {
+      if (!pronounInjected) { deduped.push('__PRONOUNS__'); pronounInjected = true; }
+    } else {
+      deduped.push(f);
+    }
+  });
+  const fieldsToRender = hasPronounTags ? deduped : fields;
+
   const banner = rs === 'overdue'
     ? `<div class="review-banner danger"><div class="rb-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div><div class="banner-text"><strong>Review overdue.</strong> ${getLegFlagReason(item)||'Linked legislation may have changed.'} Verify before use. <span class="banner-link" onclick="markReviewed('${item.id}')">Mark as reviewed ↗</span></div></div>`
     : rs === 'due'
@@ -2627,21 +2641,32 @@ function renderTemplate(item) {
         </div>` : ''}
     </div>` : '';
 
-  const fieldsHtml = fields.length
-    ? fields.map(f => renderFillField(f, fieldValues, item.id)).join('')
+  const fieldsHtml = fieldsToRender.length
+    ? fieldsToRender.map(f => f === '__PRONOUNS__' ? renderPronounField(fieldValues, item.id) : renderFillField(f, fieldValues, item.id)).join('')
     : '<div style="font-size:12px;color:var(--text3);">No placeholder fields in this template yet.</div>';
 
-  // Build case picker options
+  // Build case + people picker options
   const allCases = loadCases();
-  const casePickerHtml = allCases.length ? `
-    <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--teal-lt);border-radius:var(--r-sm);margin-bottom:16px;">
-      <svg style="width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-      <span style="font-size:12.5px;font-weight:600;color:var(--teal);">Auto-fill from case:</span>
-      <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12.5px;background:white;color:var(--text);outline:none;" onchange="setActiveCase(this.value,'${item.id}')">
-        <option value="">— None —</option>
-        ${allCases.map(c => `<option value="${c.id}" ${activeCaseId===c.id?'selected':''}>${c.employee} · ${c.position||''}${c.dept?' · '+c.dept:''}</option>`).join('')}
-      </select>
-      ${activeCaseId ? `<span style="font-size:11.5px;color:var(--teal);">✓ ${allCases.find(c=>c.id===activeCaseId)?.employee||''} pre-filled</span>` : ''}
+  const allPeople = getPeople();
+  const casePickerHtml = (allCases.length || allPeople.length) ? `
+    <div style="display:flex;flex-direction:column;gap:6px;padding:10px 14px;background:var(--teal-lt);border-radius:var(--r-sm);margin-bottom:16px;">
+      ${allCases.length ? `<div style="display:flex;align-items:center;gap:8px;">
+        <svg style="width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span style="font-size:12px;font-weight:600;color:var(--teal);flex-shrink:0;">From case:</span>
+        <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12px;background:white;color:var(--text);outline:none;" onchange="setActiveCase(this.value,'${item.id}')">
+          <option value="">— None —</option>
+          ${allCases.map(c => `<option value="${c.id}" ${activeCaseId===c.id?'selected':''}>${c.employee||'—'} · ${c.position||''}${c.dept?' · '+c.dept:''}</option>`).join('')}
+        </select>
+        ${activeCaseId ? `<span style="font-size:11px;color:var(--teal);">✓ pre-filled</span>` : ''}
+      </div>` : ''}
+      ${allPeople.length ? `<div style="display:flex;align-items:center;gap:8px;">
+        <svg style="width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span style="font-size:12px;font-weight:600;color:var(--teal);flex-shrink:0;">From people:</span>
+        <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12px;background:white;color:var(--text);outline:none;" onchange="loadPersonIntoTemplate(this.value,'${item.id}');this.value=''">
+          <option value="">— Select person —</option>
+          ${allPeople.map(p => `<option value="${p.id}">${p.pf_fullname||'—'}${p.pf_position?' · '+p.pf_position:''}</option>`).join('')}
+        </select>
+      </div>` : ''}
     </div>` : '';
 
   (()=>{const _mc=document.getElementById('mainContent');_mc.classList.remove('content-fade');void _mc.offsetWidth;_mc.classList.add('content-fade');})(); document.getElementById('mainContent').innerHTML = `
@@ -2881,7 +2906,7 @@ function outlookBody(item) {
 
   // ── Fill placeholders in a string ────────────────────────────────────────
   // Apply text case modifier: {{FIELD|lower}}, {{FIELD|upper}}, {{FIELD|title}}, {{FIELD|sentence}}
-  function applyModifier(val, mod) {
+  var applyModifier = function(val, mod) {
     if (!mod || !val) return val;
     switch(mod.trim().toLowerCase()) {
       case 'lower':    return val.toLowerCase();
@@ -2893,19 +2918,19 @@ function outlookBody(item) {
     }
   }
 
-  function resolveKey(raw) {
+  var resolveKey = function(raw) {
     // Split on | to get field name and optional modifier
     const pipe = raw.indexOf('|');
     if (pipe === -1) return { key: raw.trim(), mod: null };
     return { key: raw.slice(0, pipe).trim(), mod: raw.slice(pipe + 1).trim() };
   }
 
-  function getPronouns() {
+  var getPronouns = function() {
     var key = fieldValues['Pronouns'] || fieldValues['PRONOUNS'] || fieldValues['pronouns'] || '';
     return key ? PRONOUN_SETS[key] : null;
   }
 
-  function resolvePh(kt, mod) {
+  var resolvePh = function(kt, mod) {
     // Try uppercase first (that's what we store under), then exact, then lowercase
     var direct = fieldValues[kt.toUpperCase()] ?? fieldValues[kt] ?? fieldValues[kt.toLowerCase()];
     if (direct !== undefined && direct !== null && direct !== '') {
@@ -2922,7 +2947,7 @@ function outlookBody(item) {
     return null;
   }
 
-  function fillPh(str) {
+  var fillPh = function(str) {
     if (!str) return '';
     return str
       .replace(/\{\{([^}]+)\}\}/g, (_, raw) => {
@@ -2948,7 +2973,7 @@ function outlookBody(item) {
   }
 
   // ── Convert a block's rich HTML to Outlook-safe table HTML ───────────────
-  function blockToOutlookHtml(htmlContent, blockFontFam, blockFontSz, blockCol) {
+  var blockToOutlookHtml = function(htmlContent, blockFontFam, blockFontSz, blockCol) {
     const filled = fillPh(htmlContent);
     const tmp = document.createElement('div');
     tmp.innerHTML = filled;
@@ -2959,7 +2984,7 @@ function outlookBody(item) {
     const fc = blockCol || T.bodyColor || C.bodyText;
     const nodes = tmp.childNodes.length ? tmp.childNodes : [tmp];
 
-    function nodeToHtml(node) {
+    var nodeToHtml = function(node) {
       if (node.nodeType === 3) { return node.textContent; }
       const tag = node.tagName ? node.tagName.toLowerCase() : '';
       const inner = Array.from(node.childNodes).map(nodeToHtml).join('');
@@ -3110,7 +3135,7 @@ function outlookBody(item) {
     </td></tr>` : '';
 
   // Legacy plain-text renderer (used for old templates without blocks)
-  function bodyToHtmlLegacy(text, C) {
+  var bodyToHtmlLegacy = function(text, C) {
     return text.split(/\n\n+/).map(para => {
       const trimmed = para.trim();
       if (!trimmed) return '';
@@ -5894,7 +5919,7 @@ function renderLegDetail(id) {
   // Sort and group provisions by level hierarchy
   const sortedProvs = sortProvisions(l.provisions||[]);
 
-  function renderProvRow(p) {
+  var renderProvRow = function(p) {
     const level = p.level || 'Section';
     const cfg = PROV_LEVELS[level] || PROV_LEVELS.Section;
     const indent = {Part:0,Schedule:0,Division:1,Section:2,Clause:2,Subsection:3,Paragraph:4,Subparagraph:5}[level]||2;
@@ -6742,18 +6767,43 @@ function saveCfEdit(idx, mode, journeyId) {
 function renderCaseModalFields(journeyId) {
   window._caseModalJourneyId = journeyId;
   var fields = getCaseFormForJourney(journeyId || lcJourneyId || 'onboarding');
+  // Remove any pronoun fields from the dynamic fields — handled by system widget below
+  fields = fields.filter(function(f){ return !isPronounField(f.label); });
   var sections = getCaseSections(fields);
   var container = document.getElementById('caseFormBody');
   if (!container) return;
 
   var html = '';
+
+  // ── SYSTEM: Pronouns widget — always appears, never managed in form builder ──
+  html += '<div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin:12px 0 8px;">Employee</div>';
+  html += '<div class="form-row" style="margin-bottom:4px;">'
+    + '<div class="form-field"><label>Pronouns</label>'
+    + '<select id="sys_pronouns">'
+    + '<option value="">— Select pronouns —</option>'
+    + Object.keys(PRONOUN_SETS).map(function(k){ return '<option value="'+k+'">'+k+'</option>'; }).join('')
+    + '<option value="Custom">Custom\u2026</option>'
+    + '</select></div>'
+    + '<div class="form-field" id="sys_pronoun_preview" style="padding-top:22px;display:none;">'
+    + '<div id="sys_pronoun_chips" style="display:flex;flex-wrap:wrap;gap:4px;"></div>'
+    + '</div></div>'
+    + '<div id="sys_pronoun_custom" style="display:none;margin-bottom:8px;">'
+    + '<div class="form-row">'
+    + '<div class="form-field"><label style="font-size:10px;">Subject (she/he/they)</label><input id="sys_pron_subject" placeholder="she"></div>'
+    + '<div class="form-field"><label style="font-size:10px;">Object (her/him/them)</label><input id="sys_pron_object" placeholder="her"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-field"><label style="font-size:10px;">Possessive (her/his/their)</label><input id="sys_pron_possessive" placeholder="her"></div>'
+    + '<div class="form-field"><label style="font-size:10px;">Reflexive (herself/himself)</label><input id="sys_pron_reflexive" placeholder="herself"></div>'
+    + '</div>'
+    + '<div class="form-field"><label style="font-size:10px;">Title (Ms/Mr/Mx)</label><input id="sys_pron_title" placeholder="Ms" style="max-width:100px;"></div>'
+    + '</div>';
+
   sections.forEach(function(section) {
     var sectionFields = fields.filter(function(f) { return f.section === section && f.enabled !== false; });
     if (!sectionFields.length) return;
 
     html += '<div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin:12px 0 8px;">' + section + '</div>';
 
-    // Group into rows of 2 half-width fields
     var i = 0;
     while (i < sectionFields.length) {
       var f = sectionFields[i];
@@ -6781,10 +6831,12 @@ function renderCaseModalFields(journeyId) {
 
   container.innerHTML = html;
 
-  // Apply cascading field rules
+  // Wire up pronoun widget via addEventListener (not inline onchange)
+  var pSel = document.getElementById('sys_pronouns');
+  if (pSel) pSel.addEventListener('change', function(){ handleSystemPronounChange(this.value); });
+
   setTimeout(function() { applyCascadingRules(journeyId); }, 0);
 
-  // Populate location select
   var locSel = document.getElementById('caseLocationSelect');
   if (locSel) {
     locSel.innerHTML = '<option value="">— Select office location —</option><option value="__custom__">Other / type manually</option>';
@@ -6796,6 +6848,63 @@ function renderCaseModalFields(journeyId) {
     });
     locSel.onchange = function() { fillLocationFromSelect(this.value); };
   }
+}
+
+// Handle pronoun system widget change
+function handleSystemPronounChange(val) {
+  var preview = document.getElementById('sys_pronoun_preview');
+  var chips = document.getElementById('sys_pronoun_chips');
+  var custom = document.getElementById('sys_pronoun_custom');
+  if (val === 'Custom') {
+    if (preview) preview.style.display = 'none';
+    if (custom) custom.style.display = 'block';
+  } else if (val && PRONOUN_SETS[val]) {
+    var ps = PRONOUN_SETS[val];
+    if (chips) chips.innerHTML = Object.values(ps).map(function(p){
+      return '<span style="font-size:11px;padding:2px 8px;background:var(--teal-lt);color:var(--teal);border:1px solid var(--teal-mid);border-radius:20px;">'+p+'</span>';
+    }).join('');
+    if (preview) preview.style.display = 'block';
+    if (custom) custom.style.display = 'none';
+  } else {
+    if (preview) preview.style.display = 'none';
+    if (custom) custom.style.display = 'none';
+  }
+}
+
+// Read pronoun system widget values into the dynValues object
+function getSystemPronounValues() {
+  var sel = document.getElementById('sys_pronouns');
+  var val = sel ? sel.value.trim() : '';
+  if (!val) return {};
+
+  var ps;
+  if (val === 'Custom') {
+    ps = {
+      subject:    (document.getElementById('sys_pron_subject') ? document.getElementById('sys_pron_subject').value.trim() : ''),
+      object:     (document.getElementById('sys_pron_object') ? document.getElementById('sys_pron_object').value.trim() : ''),
+      possessive: (document.getElementById('sys_pron_possessive') ? document.getElementById('sys_pron_possessive').value.trim() : ''),
+      reflexive:  (document.getElementById('sys_pron_reflexive') ? document.getElementById('sys_pron_reflexive').value.trim() : ''),
+      title:      (document.getElementById('sys_pron_title') ? document.getElementById('sys_pron_title').value.trim() : ''),
+    };
+  } else {
+    // Try exact match first, then case-insensitive
+    ps = PRONOUN_SETS[val];
+    if (!ps) {
+      var matchKey = Object.keys(PRONOUN_SETS).find(function(k){ return k.toLowerCase() === val.toLowerCase(); });
+      ps = matchKey ? PRONOUN_SETS[matchKey] : null;
+    }
+    if (!ps) ps = {};
+  }
+
+  return {
+    'Pronouns':          val,
+    'PRONOUNS':          val,
+    'PRONOUN/SUBJECT':    ps.subject    || '',
+    'PRONOUN/OBJECT':     ps.object     || '',
+    'PRONOUN/POSSESSIVE': ps.possessive || '',
+    'PRONOUN/REFLEXIVE':  ps.reflexive  || '',
+    'PRONOUN/TITLE':      ps.title      || '',
+  };
 }
 
 function renderCfFieldInput(f) {
@@ -6854,7 +6963,13 @@ function renderCfFieldInput(f) {
 
 function getCaseFormValues(journeyId) {
   var fields = getCaseFormForJourney(journeyId);
+  // Remove pronoun fields — handled by system widget
+  fields = fields.filter(function(f){ return !isPronounField(f.label); });
   var values = {};
+
+  // Always read system pronoun widget first
+  var pronounVals = getSystemPronounValues();
+  Object.assign(values, pronounVals);
   fields.forEach(function(f) {
     if (f.id === 'cf_location') {
       values.location    = document.getElementById('caseLocation')?.value.trim() || '';
@@ -7083,14 +7198,14 @@ function rtBuild(toolbarEl, editorEl) {
   if (!toolbarEl || !editorEl) return;
 
   // Core command helper
-  function cmd(c, v) {
+  var cmd = function(c, v) {
     editorEl.focus();
     document.execCommand(c, false, v || null);
     editorEl.dispatchEvent(new Event('input'));
   }
 
   // Button factory
-  function btn(html, title, action, extraClass) {
+  var btn = function(html, title, action, extraClass) {
     const b = document.createElement('button');
     b.type = 'button'; b.title = title; b.innerHTML = html;
     if (extraClass) b.className = extraClass;
@@ -7098,10 +7213,10 @@ function rtBuild(toolbarEl, editorEl) {
     return b;
   }
 
-  function sep() { const s = document.createElement('span'); s.className = 'rt-sep'; return s; }
+  var sep = function() { const s = document.createElement('span'); s.className = 'rt-sep'; return s; }
 
   // Apply list type to current selection
-  function applyList(type) {
+  var applyList = function(type) {
     editorEl.focus();
     if (type === 'ul') {
       document.execCommand('insertUnorderedList');
@@ -7122,7 +7237,7 @@ function rtBuild(toolbarEl, editorEl) {
   }
 
   // Build selects
-  function mkSel(opts, title, onChange) {
+  var mkSel = function(opts, title, onChange) {
     const s = document.createElement('select');
     s.title = title;
     s.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
@@ -7911,17 +8026,32 @@ function _oldGetCaseFieldLib() {
 function getJourneyForm(journeyId) {
   if (!appSettings.caseFormsByJourney) appSettings.caseFormsByJourney = {};
   var existing = appSettings.caseFormsByJourney[journeyId];
+
   if (!existing || !existing.length) {
-    // Migrate from old base + extras model
+    // Fresh migration from old base + extras
     getCaseFieldLib();
     var base = appSettings.caseFormBase || DEFAULT_CASE_FORM_BASE;
     var extras = (appSettings.caseFormByType && appSettings.caseFormByType[journeyId]) || [];
-    var rows = base.concat(extras).map(function(f) {
+    existing = base.concat(extras).map(function(f) {
       return { fid: f.id, section: f.section||'Details', required: !!f.required, width: f.width||'half', enabled: f.enabled !== false };
     });
-    appSettings.caseFormsByJourney[journeyId] = rows;
+    appSettings.caseFormsByJourney[journeyId] = existing;
     saveSettings();
   }
+
+  // Auto-add Pronouns if missing (it was added to the library after initial migration)
+  var lib = getCaseFieldLib();
+  var pronounDef = lib.find(function(f){ return isPronounField(f.label); });
+  if (pronounDef && !existing.find(function(r){ return isPronounField(r.fid) || r.fid === pronounDef.id || r.fid.replace(/^(?:cf|fl|pf)_/,'') === pronounDef.id.replace(/^(?:cf|fl|pf)_/,''); })) {
+    // Insert after Preferred Name if it exists, otherwise after Full Name, otherwise at position 2
+    var insertAt = 2;
+    var prefIdx = existing.findIndex(function(r){ return r.fid === 'cf_preferred' || r.fid.includes('preferred'); });
+    if (prefIdx >= 0) insertAt = prefIdx + 1;
+    existing.splice(insertAt, 0, { fid: pronounDef.id, section: 'Employee Details', required: false, width: 'half', enabled: true });
+    appSettings.caseFormsByJourney[journeyId] = existing;
+    saveSettings();
+  }
+
   return appSettings.caseFormsByJourney[journeyId];
 }
 function saveJourneyForm(journeyId, rows) {
@@ -8174,14 +8304,6 @@ function saveCases(cases) {
 }
 
 // ── RENDER LIFECYCLE ────────────────────────────────────────────────────────
-function renderLifecycle() {
-  document.getElementById('emptyState').style.display = 'none';
-  document.getElementById('mainContent').style.display = 'block';
-  if (lcView === 'home') renderLcHome();
-  else if (lcView === 'journey') renderLcJourney();
-  else if (lcView === 'case') renderLcCase();
-}
-
 function renderLifecycle() {
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('mainContent').style.display = 'block';
@@ -8526,38 +8648,37 @@ function openEditCase(caseId) {
   const cases = loadCases();
   const c = cases.find(x => x.id === caseId);
   if (!c) return;
-  const j = LIFECYCLE_JOURNEYS[c.journeyId];
-  document.getElementById('caseModalTitle').textContent = 'Edit Profile — ' + c.employee;
+  document.getElementById('caseModalTitle').textContent = 'Edit — ' + (c.employee||'Case');
   document.getElementById('caseModal').dataset.editId = caseId;
-  // Populate all fields
-  const fields = {
-    caseEmployee: c.employee, casePreferred: c.preferred||'',
-    casePosition: c.position||'', caseClassification: c.classification||'',
-    caseDept: c.dept||'', caseLocation: c.location||'',
-    caseStreet: c.street||'', caseSuburb: c.suburb||'', casePostcode: c.postcode||'',
-    caseAward: c.award||'', caseSchedule: c.schedule||'',
-    caseManager: c.manager||'', caseHRBP: c.hrbp||'',
-    casePayrollId: c.payrollId||'', caseNotes: c.notes||''
-  };
-  Object.entries(fields).forEach(([id, val]) => {
-    const el = document.getElementById(id); if(el) el.value = val;
-  });
-  const selects = {
-    caseEmpType: c.empType||'', caseHours: c.hours||'',
-    caseProbation: c.probation||'', caseState: c.state||'WA'
-  };
-  Object.entries(selects).forEach(([id, val]) => {
-    const el = document.getElementById(id); if(el) el.value = val;
-  });
-  document.getElementById('caseStart').value = c.startDate||'';
-  document.getElementById('caseEndDate').value = c.endDate||'';
-  populateCaseLocationPicker();
-  // Pre-select the saved location if it matches
-  const locSel = document.getElementById('caseLocationSelect');
-  if (locSel && c.location) {
-    const idx = (appSettings.locations||[]).findIndex(l=>l.name===c.location);
-    if (idx >= 0) locSel.value = String(idx);
+
+  // Render the form for this journey
+  renderCaseModalFields(c.journeyId);
+
+  // Pre-populate system pronoun widget
+  const pronounVal = (c._dynValues && (c._dynValues['Pronouns'] || c._dynValues['PRONOUNS'])) || '';
+  if (pronounVal) {
+    const pSel = document.getElementById('sys_pronouns');
+    if (pSel) { pSel.value = pronounVal; handleSystemPronounChange(pronounVal); }
+    // Custom pronoun sub-fields
+    const subMap = {'PRONOUN/SUBJECT':'sys_pron_subject','PRONOUN/OBJECT':'sys_pron_object','PRONOUN/POSSESSIVE':'sys_pron_possessive','PRONOUN/REFLEXIVE':'sys_pron_reflexive','PRONOUN/TITLE':'sys_pron_title'};
+    Object.keys(subMap).forEach(function(key) {
+      const el = document.getElementById(subMap[key]);
+      if (el && c._dynValues[key]) el.value = c._dynValues[key];
+    });
   }
+
+  // Pre-populate all dynamic form fields from _dynValues
+  if (c._dynValues) {
+    const fields = getCaseFormForJourney(c.journeyId);
+    fields.forEach(function(f) {
+      if (isPronounField(f.label)) return; // handled above
+      const val = c._dynValues[f.id] || c._dynValues[f.label] || c._dynValues[f.label.toUpperCase()] || '';
+      if (!val) return;
+      const el = document.getElementById('cf_input_' + f.id);
+      if (el) el.value = val;
+    });
+  }
+
   document.getElementById('caseModal').classList.add('open');
 }
 
@@ -8680,6 +8801,63 @@ function previewPdf(pdfId, name) {
 
 
 // ── CASE-AWARE TEMPLATE GENERATION ───────────────────────────────────────
+// Pre-fill template fieldValues from a People profile
+function loadPersonIntoTemplate(personId, tplId) {
+  if (!personId) return;
+  var people = getPeople();
+  var p = people.find(function(x){ return x.id === personId; });
+  if (!p) return;
+
+  // Map profile fields → fieldValues keys
+  var mapping = {
+    pf_fullname:   ['EMPLOYEE NAME', 'FULL NAME', 'RECIPIENT NAME', 'PREFERRED NAME'],
+    pf_preferred:  ['PREFERRED NAME'],
+    pf_position:   ['POSITION', 'POSITION TITLE', 'ROLE'],
+    pf_department: ['DEPARTMENT', 'TEAM', 'DEPARTMENT / TEAM'],
+    pf_emptype:    ['EMPLOYMENT TYPE'],
+    pf_startdate:  ['START DATE', 'COMMENCEMENT DATE'],
+    pf_manager:    ['MANAGER', 'MANAGER NAME', 'DIRECT MANAGER'],
+    pf_award:      ['AWARD', 'AWARD / AGREEMENT'],
+    pf_location:   ['LOCATION', 'OFFICE LOCATION', 'WORK LOCATION'],
+    pf_payroll:    ['PAYROLL ID', 'EMPLOYEE ID'],
+    pf_email:      ['WORK EMAIL', 'EMAIL'],
+    pf_mobile:     ['MOBILE', 'PHONE'],
+  };
+
+  Object.keys(mapping).forEach(function(pfKey) {
+    var val = p[pfKey];
+    if (!val) return;
+    // Format date values
+    if (pfKey === 'pf_startdate' && val) val = formatDateValue(val);
+    mapping[pfKey].forEach(function(k) {
+      fieldValues[k] = val;
+      fieldValues[k.toUpperCase()] = val;
+    });
+    // Also store under the profile field label directly
+    var profileLabel = pfKey.replace('pf_', '').replace(/_/g, ' ').toUpperCase();
+    fieldValues[profileLabel] = val;
+  });
+
+  // Pronouns — expand full set
+  if (p.pf_pronouns) {
+    fieldValues['Pronouns'] = p.pf_pronouns;
+    fieldValues['PRONOUNS'] = p.pf_pronouns;
+    var ps = PRONOUN_SETS[p.pf_pronouns];
+    if (ps) {
+      fieldValues['PRONOUN/SUBJECT']    = ps.subject;
+      fieldValues['PRONOUN/OBJECT']     = ps.object;
+      fieldValues['PRONOUN/POSSESSIVE'] = ps.possessive;
+      fieldValues['PRONOUN/REFLEXIVE']  = ps.reflexive;
+      fieldValues['PRONOUN/TITLE']      = ps.title;
+    }
+  }
+
+  // Re-render fill panel and preview
+  var tpl = data.templates.find(function(i){ return i.id === tplId; });
+  if (tpl) renderTemplate(tpl);
+  toast('Pre-filled from ' + (p.pf_fullname || 'profile'));
+}
+
 function setActiveCase(caseId, tplId) {
   activeCaseId = caseId || null;
   if (activeCaseId) {
@@ -8769,6 +8947,49 @@ function generateFromCase(tplId, caseId) {
       if (s.adviserName) fieldValues['ER CONTACT'] = s.adviserName;
       if (s.adviserEmail) fieldValues['ER EMAIL'] = s.adviserEmail;
       if (s.adviserTitle) fieldValues['YOUR TITLE'] = s.adviserTitle;
+
+      // ── Map ALL _dynValues fields — this is the source of truth for all form data ──
+      if (c._dynValues) {
+        const lib = getFieldLib();
+        Object.keys(c._dynValues).forEach(function(fid) {
+          const val = c._dynValues[fid];
+          if (val === undefined || val === null || val === '') return;
+          const formatted = Array.isArray(val) ? val.join(', ') : String(val);
+
+          // Pronoun sub-keys — store directly (these are already the right keys)
+          if (PRONOUN_TAG_MAP[fid] || fid === 'Pronouns' || fid === 'PRONOUNS') {
+            fieldValues[fid] = formatted;
+            if (fid === 'Pronouns' || fid === 'PRONOUNS') {
+              fieldValues['Pronouns'] = formatted;
+              fieldValues['PRONOUNS'] = formatted;
+              // Also expand the sub-tags in case they weren't stored
+              const ps = PRONOUN_SETS[formatted];
+              if (ps) {
+                fieldValues['PRONOUN/SUBJECT']    = ps.subject;
+                fieldValues['PRONOUN/OBJECT']     = ps.object;
+                fieldValues['PRONOUN/POSSESSIVE'] = ps.possessive;
+                fieldValues['PRONOUN/REFLEXIVE']  = ps.reflexive;
+                fieldValues['PRONOUN/TITLE']      = ps.title;
+              }
+            }
+            return;
+          }
+
+          // Library field — map by label
+          let def = lib.find(f => f.id === fid);
+          if (!def) {
+            const stripped = fid.replace(/^(?:cf|fl|pf)_/, '');
+            def = lib.find(f => f.id.replace(/^(?:cf|fl|pf)_/, '') === stripped);
+          }
+          if (!def) {
+            const labelGuess = fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
+            def = lib.find(f => f.label.toLowerCase() === labelGuess.toLowerCase());
+          }
+          const label = def ? def.label : fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
+          fieldValues[label.toUpperCase()] = formatted;
+          fieldValues[label] = formatted;
+        });
+      }
     }
   }
 
@@ -8804,7 +9025,7 @@ function renderHierarchyView(mc) {
   const typeColors = { Act:'var(--teal)', Regulation:'#5B6EA6', Instrument:'#7A5EA6', Decision:'var(--gold)', Guidance:'#4A7A6B' };
   const typeBgs = { Act:'var(--teal-lt)', Regulation:'#EEF0FB', Instrument:'#F3EEFB', Decision:'var(--gold-lt)', Guidance:'#EBF4F0' };
 
-  function nodeHtml(l, depth) {
+  var nodeHtml = function(l, depth) {
     const children = legs.filter(x => x.parentId === l.id);
     const tc = typeColors[l.instrType] || 'var(--teal)';
     const tb = typeBgs[l.instrType] || 'var(--teal-lt)';
@@ -8895,130 +9116,6 @@ function showTopicDetail(topic) {
 
 
 // ── STEP EDITOR ───────────────────────────────────────────────────────────
-function openStepEditor(journeyId, stageId, stepId) {
-  if (!journeyId || !stageId || !stepId) {
-    toast('Cannot edit — step context not available'); return;
-  }
-  const journey = LIFECYCLE_JOURNEYS[journeyId];
-  if (!journey) { toast('Journey not found'); return; }
-  const stage = journey.stages.find(s => s.id === stageId);
-  if (!stage) { toast('Stage not found'); return; }
-  const step = stage.steps.find(s => s.id === stepId);
-  if (!step) { toast('Step not found'); return; }
-
-  // Store context
-  document.getElementById('seJourneyId').value = journeyId;
-  document.getElementById('seStageId').value = stageId;
-  document.getElementById('seStepId').value = stepId;
-
-  // Populate fields
-  document.getElementById('seTitle').value = step.title || '';
-  document.getElementById('seDesc').value = step.desc || '';
-  document.getElementById('seResponsible').value = step.responsible || '';
-
-  // Populate template picker
-  const picker = document.getElementById('seTplPicker');
-  const linked = step.tplIds || [];
-  const allTpls = data.templates;
-  if (!allTpls.length) {
-    picker.innerHTML = '<div style="font-size:12px;color:var(--text3);">No templates yet — create some in the Templates tab.</div>';
-  } else {
-    // Group by category
-    const cats = [...new Set(allTpls.map(t => t.category))];
-    picker.innerHTML = cats.map(cat => {
-      const group = allTpls.filter(t => t.category === cat);
-      return `<div style="margin-bottom:10px;">
-        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:5px;">${cat}</div>
-        ${group.map(t => `
-          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:6px 8px;border-radius:var(--r-sm);transition:background .1s;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='transparent'">
-            <input type="checkbox" value="${t.id}" ${linked.includes(t.id)?'checked':''} style="margin-top:2px;accent-color:var(--teal);flex-shrink:0;">
-            <div>
-              <div style="font-size:13px;font-weight:500;color:var(--text);">${t.name}</div>
-              <div style="font-size:11.5px;color:var(--text3);">${t.desc||t.format||''}</div>
-            </div>
-          </label>`).join('')}
-      </div>`;
-    }).join('');
-  }
-
-  document.getElementById('stepEditorModal').classList.add('open');
-}
-
-function saveStepEditor() {
-  const journeyId = document.getElementById('seJourneyId').value;
-  const stageId   = document.getElementById('seStageId').value;
-  const stepId    = document.getElementById('seStepId').value;
-
-  const journey = LIFECYCLE_JOURNEYS[journeyId];
-  if (!journey) return;
-  const stage = journey.stages.find(s => s.id === stageId);
-  if (!stage) return;
-  const step = stage.steps.find(s => s.id === stepId);
-  if (!step) return;
-
-  step.title       = document.getElementById('seTitle').value.trim() || step.title;
-  step.desc        = document.getElementById('seDesc').value.trim() || step.desc;
-  step.responsible = document.getElementById('seResponsible').value.trim() || step.responsible;
-  step.tplIds      = [...document.querySelectorAll('#seTplPicker input[type=checkbox]:checked')].map(cb => cb.value);
-
-  document.getElementById('stepEditorModal').classList.remove('open');
-  toast('Step updated');
-
-  // Re-render the current lifecycle view
-  if (lcView === 'case' && lcCaseId) renderLcCase();
-  else renderLcJourney();
-}
-
-
-// ── STEP EDITOR ──────────────────────────────────────────────────────────
-// LIFECYCLE_JOURNEYS is a const but steps.tplIds needs to be mutable.
-// We keep a mutable override map: stepOverrides[journeyId][stageId][stepId]
-// This persists to localStorage so customisations survive page reload.
-
-function loadStepOverrides() {
-  try { return JSON.parse(localStorage.getItem('er_step_overrides') || '{}'); }
-  catch(e) { return {}; }
-}
-function saveStepOverrides(overrides) {
-  localStorage.setItem('er_step_overrides', JSON.stringify(overrides));
-}
-
-// Get the effective step definition (override merged over default)
-function getStep(journeyId, stageId, stepId) {
-  const overrides = loadStepOverrides();
-  const journey = LIFECYCLE_JOURNEYS[journeyId];
-  if (!journey) return null;
-  const stage = journey.stages.find(s => s.id === stageId);
-  if (!stage) return null;
-  const base = stage.steps.find(s => s.id === stepId);
-  if (!base) return null;
-  const override = (overrides[journeyId]||{})[stageId]?.[stepId];
-  return override ? { ...base, ...override } : base;
-}
-
-// Get all steps for a stage (with overrides applied)
-function getStageSteps(journeyId, stageId) {
-  const overrides = loadStepOverrides();
-  const journey = LIFECYCLE_JOURNEYS[journeyId];
-  if (!journey) return [];
-  const stage = journey.stages.find(s => s.id === stageId);
-  if (!stage) return [];
-  // Start with base steps + any saved custom steps
-  const stageOverride = (overrides[journeyId]||{})[stageId] || {};
-  const baseSteps = stage.steps.map(s => {
-    const ov = stageOverride[s.id];
-    return ov ? { ...s, ...ov } : s;
-  });
-  // Add any extra steps saved in overrides (not in base)
-  const extraIds = Object.keys(stageOverride).filter(id =>
-    id.startsWith('custom_') && !stage.steps.find(s => s.id === id)
-  );
-  const extraSteps = extraIds.map(id => stageOverride[id]);
-  return [...baseSteps, ...extraSteps];
-}
-
-var editingStepCtx = null; // { journeyId, stageId, stepId }
-
 function openStepEditor(journeyId, stageId, stepId) {
   // Attach journeyId/stageId to step for context if not already there
   const step = getStep(journeyId, stageId, stepId);
@@ -9164,16 +9261,19 @@ function openStepPackage(stepId, journeyId, stageId, caseId) {
     if (c.manager) { caseFields['MANAGER NAME'] = c.manager; caseFields['MANAGER'] = c.manager; }
     if (c.startDate) { caseFields['START DATE'] = c.startDate; caseFields['COMMENCEMENT DATE'] = c.startDate; }
     // Map ALL form field values by their library label — {{LABEL}} in any template pre-fills
-    // DEBUG — remove after diagnosis
-  console.log('=== CASE _dynValues ===', JSON.stringify(c?._dynValues));
-  console.log('=== caseFields after mapping ===');
-
-  if (c._dynValues) {
+    if (c._dynValues) {
       const lib = getFieldLib();
       Object.keys(c._dynValues).forEach(fid => {
         const val = c._dynValues[fid];
         if (val === undefined || val === null || val === '') return;
         const formatted = Array.isArray(val) ? val.join(', ') : String(val);
+
+        // Pronoun sub-keys stored directly — pass straight through
+        if (PRONOUN_TAG_MAP[fid] || fid.startsWith('PRONOUN/') || fid === 'Pronouns' || fid === 'PRONOUNS') {
+          caseFields[fid] = formatted;
+          if (fid === 'Pronouns' || fid === 'PRONOUNS') caseFields['PRONOUNS'] = caseFields['Pronouns'] = formatted;
+          return;
+        }
 
         // Find the field definition — try all ID prefix variants then label-derived
         let def = lib.find(f => f.id === fid);
@@ -9205,11 +9305,9 @@ function openStepPackage(stepId, journeyId, stageId, caseId) {
           caseFields['PRONOUN/REFLEXIVE']  = ps.reflexive;
           caseFields['PRONOUN/TITLE']      = ps.title;
           caseFields['Pronouns'] = formatted;
-        }
+          }
       });
     }
-  console.log('=== caseFields keys ===', Object.keys(caseFields).join(', '));
-  console.log('=== caseFields ===', JSON.stringify(caseFields));
   }
 
   packageCopyStatus = {};
@@ -11229,7 +11327,7 @@ function beMakeAttArea(b) {
   };
   renderList();
   const fi = document.createElement('input'); fi.type='file'; fi.multiple=true; fi.style.display='none';
-  function addFiles(files) {
+  var addFiles = function(files) {
     Array.from(files).forEach(f => {
       const reader = new FileReader();
       reader.onload = ev => {
