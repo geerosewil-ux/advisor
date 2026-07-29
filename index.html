@@ -3088,12 +3088,15 @@ function outlookBody(item) {
     enabledBlocks.forEach((b, idx) => {
       if (b.type === 'text') {
         const hasAccent = b.bgColor && b.bgColor !== 'transparent' && b.bgColor !== '#ffffff' && b.bgColor !== 'white' && b.bgColor !== '';
-        // Block-level font override: only apply if explicitly set AND different from global
+        // Block-level font override: only apply when explicitly different from global AND non-empty
         const T = getTypography();
         const globalFont = T.fontFamily;
-        const blockFontFamily = (b.fontFamily && b.fontFamily !== 'Inter' && b.fontFamily !== globalFont) ? b.fontFamily : '';
-        const blockFontSize = (b.fontSize && b.fontSize > 0 && b.fontSize !== 10) ? `${Math.round(b.fontSize * 1.333)}px` : '';
-        const blockTextColor = (b.textColor && b.textColor !== '#1a1a1a' && b.textColor !== '#1A1A1A' && b.textColor !== '') ? b.textColor : '';
+        const bFont = b.fontFamily || '';
+        const bSize = b.fontSize || 0;
+        const bColor = b.textColor || '';
+        const blockFontFamily = (bFont && bFont !== 'Inter' && bFont !== 'Arial' && bFont !== globalFont) ? bFont : '';
+        const blockFontSize = (bSize && bSize > 0 && bSize !== 10 && bSize !== 13) ? `${Math.round(bSize * 1.333)}px` : '';
+        const blockTextColor = (bColor && bColor !== '#1a1a1a' && bColor !== '#1A1A1A' && bColor !== T.bodyColor) ? bColor : '';
 
         const divider = idx > 0
           ? `<div style="border-top:0.5px solid #F0F0F0;margin:14px 0 12px;"></div>`
@@ -3488,15 +3491,21 @@ function buildAndDownloadEml(name, subject, bodyText, bodyHtml, attachments) {
   lines.push('');
   lines.push(`--${altBoundary}`);
   lines.push('Content-Type: text/plain; charset=UTF-8');
-  lines.push('Content-Transfer-Encoding: quoted-printable');
+  lines.push('Content-Transfer-Encoding: base64');
   lines.push('');
-  lines.push(bodyText);
+  const plainB64 = btoa(unescape(encodeURIComponent(bodyText || '')));
+  lines.push((plainB64.match(/.{1,76}/g) || []).join('\r\n'));
   lines.push('');
   lines.push(`--${altBoundary}`);
   lines.push('Content-Type: text/html; charset=UTF-8');
-  lines.push('Content-Transfer-Encoding: quoted-printable');
+  lines.push('Content-Transfer-Encoding: base64');
   lines.push('');
-  lines.push(`<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>${bodyHtml}</body></html>`);
+  // Base64-encode the HTML body so non-ASCII chars (em dashes, smart quotes etc.) survive Outlook
+  const htmlDoc = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{margin:0;padding:0;background:#F4F5F7;}</style></head><body>${bodyHtml}</body></html>`;
+  const htmlB64 = btoa(unescape(encodeURIComponent(htmlDoc)));
+  // Chunk at 76 chars per line per RFC 2045
+  const htmlChunked = (htmlB64.match(/.{1,76}/g) || []).join('\r\n');
+  lines.push(htmlChunked);
   lines.push('');
   lines.push(`--${altBoundary}--`);
 
@@ -6965,6 +6974,17 @@ function renderCfFieldInput(f) {
       }).join('');
       return label + '<div style="border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;background:white;">' + items + '</div>'
         + '<div id="cf_checklist_progress_' + f.id + '" style="font-size:10.5px;color:var(--text3);margin-top:4px;"></div>';
+    case 'location':
+      var locs = (appSettings.locations || []).map(function(l){ return typeof l==='string'?l:l.name; });
+      var locOpts = '<option value="">— Select office location —</option>' + locs.map(function(l){return '<option>'+l+'</option>';}).join('');
+      return label + '<select id="cf_input_' + f.id + '">' + locOpts + '</select>';
+    case 'manager':
+      var mgPeople = getPeople();
+      var mgrOpts = '<option value="">— Select manager —</option>' + mgPeople.map(function(p){
+        return '<option value="' + (p.pf_fullname||'').replace(/"/g,'&quot;') + '">'
+          + (p.pf_fullname||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
+      }).join('');
+      return label + '<select id="cf_input_' + f.id + '">' + mgrOpts + '</select>';
     default:
       return label + '<input id="cf_input_' + f.id + '" placeholder="' + (f.placeholder||'') + '">';
   }
@@ -9940,6 +9960,8 @@ function renderSettings() {
     { id:'tplDefaults',     label:'Template Defaults' },
     { id:'customJourneys',  label:'Custom Journeys' },
     { id:'caseFields',      label:'Fields' },
+    { id:'peopleFields',    label:'People Form' },
+    { id:'candidateFields', label:'Candidate Form' },
     { id:'caseForms',       label:'Form Builder' },
     { id:'quickBlocks',     label:'Quick Blocks' },
     { id:'dateFormat',      label:'Date Format' },
@@ -9966,6 +9988,60 @@ function renderSettingsSection() {
   const s = appSettings;
 
   if (settingsSection === 'customFields') { settingsSection = 'caseFields'; }
+  if (settingsSection === 'peopleFields') {
+    var pFields = getProfileFields();
+    var typeLabels2 = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-Select',location:'Location',manager:'Manager'};
+    el.innerHTML = `
+      <div class="settings-section-title">People Form</div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6;">Fields shown on employee profiles in the People tab.</p>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
+        ${pFields.map((f,i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);">
+            <div style="flex:1;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:13px;font-weight:600;color:var(--text);">${f.label}</span>
+                <span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;background:var(--teal-lt);color:var(--teal);">${typeLabels2[f.type]||'Text'}</span>
+                ${f.required?'<span style="font-size:9.5px;color:var(--red);">required</span>':''}
+              </div>
+              <div style="font-size:11px;color:var(--text3);">${f.group}</div>
+            </div>
+            <button class="btn btn-sm" onclick="pfEdit(${i})">Edit</button>
+            <button class="btn btn-sm" onclick="pfDelete(${i})" style="color:var(--red);">×</button>
+          </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;">
+        <button class="btn btn-sm" onclick="pfAddField()">+ Add field</button>
+        <button class="btn btn-sm" onclick="appSettings.profileFields=null;saveSettings();renderSettingsSection()" style="color:var(--text3);">Reset to defaults</button>
+      </div>`;
+    return;
+  }
+  if (settingsSection === 'candidateFields') {
+    var cFields = (appSettings.candidateFields && appSettings.candidateFields.length) ? appSettings.candidateFields : DEFAULT_CANDIDATE_FIELDS;
+    var typeLabels3 = {text:'Text',textarea:'Text Area',date:'Date',select:'Select',location:'Location',manager:'Manager'};
+    el.innerHTML = `
+      <div class="settings-section-title">Candidate Form</div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6;">Fields shown on candidate profiles in the Recruitment pipeline.</p>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
+        ${cFields.map((f,i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);">
+            <div style="flex:1;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:13px;font-weight:600;color:var(--text);">${f.label}</span>
+                <span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;background:var(--teal-lt);color:var(--teal);">${typeLabels3[f.type]||'Text'}</span>
+                ${f.required?'<span style="font-size:9.5px;color:var(--red);">required</span>':''}
+              </div>
+              <div style="font-size:11px;color:var(--text3);">${f.group}</div>
+            </div>
+            <button class="btn btn-sm" onclick="cfEdit2(${i})">Edit</button>
+            <button class="btn btn-sm" onclick="cfDelete2(${i})" style="color:var(--red);">×</button>
+          </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm" onclick="cfAddField2()">+ Add field</button>
+        <button class="btn btn-sm" onclick="appSettings.candidateFields=null;saveSettings();renderSettingsSection()" style="color:var(--text3);">Reset to defaults</button>
+      </div>`;
+    return;
+  }
   if (settingsSection === 'customJourneys') {
     var journeys = getCustomJourneys();
     el.innerHTML = `
@@ -10036,6 +10112,7 @@ function renderSettingsSection() {
               <option value="multiselect">Multi-Select</option>
               <option value="checklist">Checklist (tick-off tasks)</option>
               <option value="location">Office Location</option>
+              <option value="manager">Manager (from People)</option>
             </select>
           </div>
           <div class="form-field" style="flex:1;margin:0;">
@@ -10502,6 +10579,65 @@ function populateSelect(id, key) {
   }
 }
 
+// ── PEOPLE FORM FIELD EDITOR ──────────────────────────────────────────────
+function pfEdit(idx) {
+  var fields = getProfileFields();
+  var f = fields[idx]; if (!f) return;
+  var newLabel = prompt('Field label:', f.label); if (!newLabel) return;
+  f.label = newLabel.trim();
+  f.group = prompt('Group (Personal/Employment/Other):', f.group||'Personal') || f.group;
+  saveProfileFields(fields);
+  renderSettingsSection();
+}
+function pfDelete(idx) {
+  var fields = getProfileFields();
+  if (!confirm('Remove "' + fields[idx].label + '" from People form?')) return;
+  fields.splice(idx, 1);
+  saveProfileFields(fields);
+  renderSettingsSection();
+}
+function pfAddField() {
+  var label = prompt('New field label:'); if (!label) return;
+  var group = prompt('Group:', 'Personal') || 'Personal';
+  var type = prompt('Type (text/textarea/date/select/location/manager):', 'text') || 'text';
+  var fields = getProfileFields();
+  fields.push({ id: 'pf_' + label.toLowerCase().replace(/[^a-z0-9]+/g,'_'), label: label.trim(), type: type, width: 'half', required: false, group: group, options: [] });
+  saveProfileFields(fields);
+  renderSettingsSection();
+}
+
+// ── CANDIDATE FORM FIELD EDITOR ───────────────────────────────────────────
+function getCandidateFields() {
+  return (appSettings.candidateFields && appSettings.candidateFields.length) ? appSettings.candidateFields : JSON.parse(JSON.stringify(DEFAULT_CANDIDATE_FIELDS));
+}
+function saveCandidateFields(fields) { appSettings.candidateFields = fields; saveSettings(); }
+
+function cfEdit2(idx) {
+  var fields = getCandidateFields();
+  var f = fields[idx]; if (!f) return;
+  var newLabel = prompt('Field label:', f.label); if (!newLabel) return;
+  f.label = newLabel.trim();
+  f.group = prompt('Group:', f.group||'Application') || f.group;
+  saveCandidateFields(fields);
+  renderSettingsSection();
+}
+function cfDelete2(idx) {
+  var fields = getCandidateFields();
+  if (!confirm('Remove "' + fields[idx].label + '" from Candidate form?')) return;
+  fields.splice(idx, 1);
+  saveCandidateFields(fields);
+  renderSettingsSection();
+}
+function cfAddField2() {
+  var label = prompt('New field label:'); if (!label) return;
+  var group = prompt('Group:', 'Application') || 'Application';
+  var type = prompt('Type (text/textarea/date/select/location/manager):', 'text') || 'text';
+  var fields = getCandidateFields();
+  fields.push({ id: 'cand_' + label.toLowerCase().replace(/[^a-z0-9]+/g,'_'), label: label.trim(), type: type, width: 'half', required: false, group: group, options: [] });
+  saveCandidateFields(fields);
+  renderSettingsSection();
+}
+
 // ── CANDIDATES ────────────────────────────────────────────────────────────
 var DEFAULT_CANDIDATE_FIELDS = [
   {id:'cand_name',    label:'Full Name',          type:'text',    width:'half', required:true,  group:'Personal'},
@@ -10513,6 +10649,8 @@ var DEFAULT_CANDIDATE_FIELDS = [
   {id:'cand_notice',  label:'Notice Period',      type:'text',    width:'half', required:false, group:'Application'},
   {id:'cand_salary',  label:'Salary Expectation', type:'text',    width:'half', required:false, group:'Application'},
   {id:'cand_role',    label:'Role Applied For',   type:'text',    width:'half', required:false, group:'Application'},
+  {id:'cand_location',label:'Location',           type:'location',width:'half', required:false, group:'Application'},
+  {id:'cand_manager', label:'Reporting Manager',  type:'select',  width:'half', required:false, group:'Application'},
   {id:'cand_stage',   label:'Stage',              type:'select',  width:'half', required:false, group:'Application',
     options:['Applied','Shortlisted','Interviewing','Reference Check','Offered','Accepted','Rejected','Withdrawn']},
   {id:'cand_notes',   label:'Notes',              type:'textarea',width:'full', required:false, group:'Application'},
@@ -10540,7 +10678,18 @@ function openCandidateModal(roleId, candidateId) {
   editingCandidateRoleId = roleId;
   editingCandidateId = candidateId || null;
   var candidates = getCandidates(roleId);
-  var c = candidateId ? candidates.find(function(x){ return x.id === candidateId; }) : {};
+  var c = candidateId ? candidates.find(function(x){ return x.id === candidateId; }) : null;
+
+  // Inherit role details for new candidates
+  if (!c) {
+    var items = loadPipeline();
+    var role = items.find(function(x){ return x.id === roleId; });
+    c = role ? {
+      cand_role:    role.position || '',
+      cand_location: role.location || '',
+      cand_manager: role.manager  || '',
+    } : {};
+  }
 
   var modal = document.getElementById('candidateModal');
   if (!modal) {
@@ -10550,7 +10699,7 @@ function openCandidateModal(roleId, candidateId) {
     document.body.appendChild(modal);
   }
 
-  var fields = DEFAULT_CANDIDATE_FIELDS;
+  var fields = getCandidateFields();
   var sections = []; fields.forEach(function(f){ if(sections.indexOf(f.group)<0) sections.push(f.group); });
 
   var html = sections.map(function(sec) {
@@ -10571,11 +10720,23 @@ function openCandidateModal(roleId, candidateId) {
     return '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin:12px 0 8px;">' + sec + '</div>' + rows;
   }).join('');
 
+  var items = loadPipeline();
+  var role = items.find(function(x){ return x.id === roleId; });
+  var roleContext = role ? '<div style="background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:var(--r-sm);padding:10px 14px;margin-bottom:16px;font-size:12.5px;color:var(--teal);">'
+    + '<strong>' + (role.position||'Role') + '</strong>'
+    + (role.dept ? ' · ' + role.dept : '')
+    + (role.location ? ' · ' + role.location : '')
+    + (role.manager ? ' · Manager: ' + role.manager : '')
+    + '<div style="font-size:10.5px;color:var(--text3);margin-top:3px;">Role details pre-filled where applicable — override as needed</div>'
+    + '</div>' : '';
+
   modal.innerHTML = '<div class="modal" style="width:580px;max-height:90vh;overflow-y:auto;">'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">'
     + '<div class="modal-title" style="margin:0;">' + (candidateId ? 'Edit Candidate' : 'Add Candidate') + '</div>'
     + (candidateId ? '<button class="btn btn-sm" style="color:var(--red);" onclick="deleteCandidate(\'' + roleId + '\',\'' + candidateId + '\')">Delete</button>' : '')
-    + '</div>' + html
+    + '</div>'
+    + roleContext
+    + html
     + '<div class="modal-footer">'
     + '<button class="btn" onclick="document.getElementById(\'candidateModal\').classList.remove(\'open\')">Cancel</button>'
     + (candidateId ? '<button class="btn" onclick="promoteCandidateToPeople(\'' + roleId + '\',\'' + candidateId + '\')">→ Add to People</button>' : '')
@@ -10586,19 +10747,41 @@ function openCandidateModal(roleId, candidateId) {
 }
 
 function renderCandidateField(f, c) {
-  var val = (c && c[f.id]) || '';
+  var val = (c && (c[f.id] !== undefined ? c[f.id] : '')) || '';
   var label = '<label>' + f.label + (f.required ? ' <span style="color:var(--red);">*</span>' : '') + '</label>';
   var id = 'cand_input_' + f.id;
+
+  // Manager field — populated from People
+  if (f.id === 'cand_manager') {
+    var people = getPeople();
+    var opts = '<option value="">— Select manager —</option>'
+      + people.map(function(p) {
+          var title = p.pf_position ? ' (' + p.pf_position + ')' : '';
+          return '<option value="' + (p.pf_fullname||'').replace(/"/g,'&quot;') + '" ' + (val===p.pf_fullname?'selected':'') + '>' + (p.pf_fullname||'—') + title + '</option>';
+        }).join('');
+    return label + '<select id="' + id + '">' + opts + '</select>';
+  }
+
+  // Location field — from settings
+  if (f.id === 'cand_location') {
+    var locs = (appSettings.locations || []).map(function(l){ return typeof l==='string'?l:l.name; });
+    if (locs.length) {
+      var opts2 = '<option value="">— Select location —</option>'
+        + locs.map(function(l){ return '<option' + (val===l?' selected':'') + '>' + l + '</option>'; }).join('');
+      return label + '<select id="' + id + '">' + opts2 + '</select>';
+    }
+  }
+
   if(f.type === 'textarea') return label + '<textarea id="' + id + '" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">' + val.replace(/</g,'&lt;') + '</textarea>';
   if(f.type === 'select') {
-    var opts = '<option value="">— Select —</option>' + (f.options||[]).map(function(o){ return '<option' + (val===o?' selected':'') + '>' + o + '</option>'; }).join('');
-    return label + '<select id="' + id + '">' + opts + '</select>';
+    var opts3 = '<option value="">— Select —</option>' + (f.options||[]).map(function(o){ return '<option' + (val===o?' selected':'') + '>' + o + '</option>'; }).join('');
+    return label + '<select id="' + id + '">' + opts3 + '</select>';
   }
   return label + '<input id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '" placeholder="' + (f.placeholder||f.label) + '">';
 }
 
 function saveCandidate() {
-  var fields = DEFAULT_CANDIDATE_FIELDS;
+  var fields = getCandidateFields();
   var missing = fields.filter(function(f){ return f.required && !(document.getElementById('cand_input_'+f.id)||{}).value; });
   if(missing.length) { alert('Required: ' + missing.map(function(f){return f.label;}).join(', ')); return; }
   var candidate = { id: editingCandidateId || ('cand_' + Date.now()), updated: todayStr() };
