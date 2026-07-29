@@ -2500,17 +2500,23 @@ function showEmpty() {
 
 // ── PLACEHOLDERS ──────────────────────────────────────────────────────────
 function extractFields(body, blocks, subject) {
-  const fromBody = [...(body||'').matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1]);
-  const fromSubject = [...(subject||'').matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1]);
+  // Extract placeholder keys, stripping modifiers (|cap, |lower etc.) — return unique base keys
+  function extractKeys(str) {
+    return [...(str||'').matchAll(/\{\{([^}]+)\}\}/g)]
+      .map(m => m[1].split('|')[0].trim())  // strip modifier, trim whitespace
+      .filter(Boolean);
+  }
+  const fromBody = extractKeys(body);
+  const fromSubject = extractKeys(subject);
   const fromBlocks = [];
   if (blocks && blocks.length) {
-    blocks.filter(b => b.type === "text" && b.content).forEach(b => {
-      [...b.content.matchAll(/\{\{([^}]+)\}\}/g)].forEach(m => fromBlocks.push(m[1]));
-      const tmp = document.createElement("div");
+    blocks.filter(b => b.type === 'text' && b.content).forEach(b => {
+      extractKeys(b.content).forEach(k => fromBlocks.push(k));
+      const tmp = document.createElement('div');
       tmp.innerHTML = b.content;
-      tmp.querySelectorAll(".be-ph").forEach(el => {
+      tmp.querySelectorAll('.be-ph').forEach(el => {
         const m = el.textContent.match(/\{\{([^}]+)\}\}/);
-        if (m) fromBlocks.push(m[1]);
+        if (m) fromBlocks.push(m[1].split('|')[0].trim());
       });
     });
   }
@@ -2574,7 +2580,15 @@ function getRawText(body) {
 function renderTemplate(item) {
   const rs = reviewStatus(item);
   const fields = extractFields(item.body, item.blocks, item.subject);
-  fields.forEach(f => { if (!fieldValues[f]) fieldValues[f] = ''; });
+  // Only initialise missing fields - never overwrite existing values with ''
+  // Also check canonical aliases so pre-loaded values aren't blocked
+  fields.forEach(f => {
+    const base = f.split('|')[0].trim();
+    if (fieldValues[base] || fieldValues[base.toUpperCase()]) return; // already have a value
+    const canonicalId = resolveToCanonical(base);
+    if (canonicalId && (fieldValues[canonicalId] || fieldValues[canonicalId.toUpperCase()])) return; // canonical has value
+    if (fieldValues[f] === undefined) fieldValues[f] = ''; // only init if truly absent
+  });
 
   // If template uses any PRONOUN/ tags, inject a single Pronouns master field
   const hasPronounTags = fields.some(f => /^PRONOUN\//i.test(f.split('|')[0].trim()) || isPronounField(f.split('|')[0].trim()));
@@ -6718,8 +6732,8 @@ function getAllPlaceholders() {
 
 // Render a field in fill mode based on its type
 function renderFillField(f, fieldValues, itemId) {
-  const fSafe = f.replace(/'/g, "\\'");
-  const fKey = f.split('|')[0].trim(); // strip modifier
+  const fKey = f.split('|')[0].trim(); // strip modifier — this is the canonical storage key
+  const fSafe = fKey.replace(/'/g, "\\'"); // always use stripped key for storage
 
   // Pronouns — special field
   if (isPronounField(fKey)) return renderPronounField(fieldValues, itemId);
