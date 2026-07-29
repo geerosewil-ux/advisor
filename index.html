@@ -2064,6 +2064,8 @@ async function loadFromFirestore() {
     if (customJ) { localStorage.setItem('er_custom_journeys', JSON.stringify(customJ)); mergeCustomJourneys(); changed = true; }
     const qbs = await fsGet('quickBlocks');
     if (qbs) { localStorage.setItem('er_quick_blocks', JSON.stringify(qbs)); changed = true; }
+    const cands = await fsGet('candidates');
+    if (cands) { localStorage.setItem('er_candidates', JSON.stringify(cands)); changed = true; }
     if (changed) {
       updateBadge();
     // Show file:// mode notice
@@ -2778,10 +2780,11 @@ function renderTemplate(item) {
                 onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text3)'">+ Field</button>
             </div>` : ''}
 
+            <!-- Subject / Re line — label changes by format -->
             <div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border);">
-              <span style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;width:52px;">Subject</span>
+              <span style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;width:52px;">${item.format === 'email' || !item.format ? 'Subject' : item.format === 'letter' ? 'Re' : 'Title'}</span>
               <input id="liveSubject" value="${subjectRaw}" oninput="updateLiveSubject('${item.id}',this.value)"
-                style="flex:1;min-width:0;border:none;background:transparent;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--text);outline:none;" placeholder="Subject / title…">
+                style="flex:1;min-width:0;border:none;background:transparent;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--text);outline:none;" placeholder="${item.format === 'letter' ? 'Re: …' : item.format === 'guide' ? 'Document title…' : 'Subject / title…'}">
               <button onclick="subjOpenFieldPicker(event,'liveSubject')" title="Insert field"
                 style="background:none;border:1px dashed var(--border);border-radius:3px;padding:1px 7px;font-size:10px;color:var(--text3);cursor:pointer;font-family:inherit;flex-shrink:0;"
                 onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'"
@@ -3049,6 +3052,30 @@ function outlookBody(item) {
     return out || `<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${filled.replace(/<[^>]+>/g,'')}</p>`;
   }
 
+  // Legacy plain-text renderer (used for old templates without blocks)
+  var bodyToHtmlLegacy = function(text, C) {
+    return text.split(/\n\n+/).map(para => {
+      const trimmed = para.trim();
+      if (!trimmed) return '';
+      if (/^[A-Z][A-Z\s\/\-–]{3,}$/.test(trimmed.split('\n')[0])) {
+        const lines = trimmed.split('\n');
+        const heading = lines[0];
+        const rest = lines.slice(1).join('\n').trim();
+        return `<p style="margin:16px 0 4px;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${heading}</p>`
+          + (rest ? `<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${rest.replace(/\n/g,'<br>')}</p>` : '');
+      }
+      if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*')) {
+        const items = trimmed.split('\n').filter(l=>l.trim());
+        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map(li=>`<tr><td width="18" valign="top" style="font-family:Arial,sans-serif;font-size:14px;color:${C.bodyHeading};padding-top:1px;">•</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.replace(/^[•\-\*]\s*/,'')}</td></tr>`).join('')}</table>`;
+      }
+      if (/^\d+\./.test(trimmed)) {
+        const items = trimmed.split('\n').filter(l=>l.trim());
+        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map((li,i)=>`<tr><td width="24" valign="top" style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;color:${C.bodyHeading};padding-top:1px;">${i+1}.</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.replace(/^\d+\.\s*/,'')}</td></tr>`).join('')}</table>`;
+      }
+      return `<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${trimmed.replace(/\n/g,'<br>')}</p>`;
+    }).join('');
+  }
+
   // ── Build body HTML from blocks (preferred) or legacy plain text ──────────
   let bodyParas = '';
   const blocks = item.blocks && item.blocks.length ? item.blocks : null;
@@ -3134,29 +3161,6 @@ function outlookBody(item) {
       </table>
     </td></tr>` : '';
 
-  // Legacy plain-text renderer (used for old templates without blocks)
-  var bodyToHtmlLegacy = function(text, C) {
-    return text.split(/\n\n+/).map(para => {
-      const trimmed = para.trim();
-      if (!trimmed) return '';
-      if (/^[A-Z][A-Z\s\/\-–]{3,}$/.test(trimmed.split('\n')[0])) {
-        const lines = trimmed.split('\n');
-        const heading = lines[0];
-        const rest = lines.slice(1).join('\n').trim();
-        return `<p style="margin:16px 0 4px;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${heading}</p>`
-          + (rest ? `<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${rest.replace(/\n/g,'<br>')}</p>` : '');
-      }
-      if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*')) {
-        const items = trimmed.split('\n').filter(l=>l.trim());
-        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map(li=>`<tr><td width="18" valign="top" style="font-family:Arial,sans-serif;font-size:14px;color:${C.bodyHeading};padding-top:1px;">•</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.replace(/^[•\-\*]\s*/,'')}</td></tr>`).join('')}</table>`;
-      }
-      if (/^\d+\./.test(trimmed)) {
-        const items = trimmed.split('\n').filter(l=>l.trim());
-        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map((li,i)=>`<tr><td width="24" valign="top" style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;color:${C.bodyHeading};padding-top:1px;">${i+1}.</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.replace(/^\d+\.\s*/,'')}</td></tr>`).join('')}</table>`;
-      }
-      return `<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${trimmed.replace(/\n/g,'<br>')}</p>`;
-    }).join('');
-  }
 
   if (fmt === 'email') {
     const toVal = (item.to && item.to.trim())
@@ -3195,43 +3199,67 @@ function outlookBody(item) {
 </table>`;
 
   } else if (fmt === 'letter') {
+    // Resolve addressee fields
+    const recipientName = fieldValues['EMPLOYEE NAME'] || fieldValues['FULL NAME'] || fieldValues['RECIPIENT NAME'] || '';
+    const recipientTitle = fieldValues['PRONOUN/TITLE'] || '';
+    const recipientOrg = fieldValues['ORGANISATION'] || '';
+    const recipientAddr = fieldValues['STREET ADDRESS'] || fieldValues['ADDRESS'] || '';
+    const adviserName = appSettings.adviserName || '';
+    const adviserTitle = appSettings.adviserTitle || '';
+    const orgName = appSettings.orgName || 'Employment Relations';
+
     return `
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F5F7">
-<tr><td align="center" style="padding:20px 10px;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:760px;">
+<tr><td align="center" style="padding:24px 10px;">
+<table width="620" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;font-family:${T.fontFamily},Arial,sans-serif;">
 
-  <!-- TOP RULE -->
-  <tr><td height="5" style="background-color:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
+  <!-- TOP ACCENT RULE -->
+  <tr><td height="4" style="background:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
 
-  <!-- LETTERHEAD -->
-  <tr><td style="background-color:${C.headerText};padding:32px 48px 20px;">
+  <!-- LETTERHEAD: org name + date -->
+  <tr><td style="padding:28px 48px 20px;border-bottom:1px solid #F0F0F0;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td><p style="margin:0;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#141C28;">EMPLOYMENT RELATIONS</p>
-          <p style="margin:2px 0 0;font-family:Arial,sans-serif;font-size:11.5px;color:${C.footerText};">Private &amp; Confidential</p></td>
-      <td align="right"><p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#4B5563;">${nowDate}</p>
+      <td>
+        <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:14px;font-weight:700;color:${C.accentLine};letter-spacing:.02em;">${orgName}</p>
+        <p style="margin:3px 0 0;font-family:${T.fontFamily},Arial,sans-serif;font-size:10.5px;color:#9CA3AF;letter-spacing:.06em;text-transform:uppercase;">Private &amp; Confidential</p>
+      </td>
+      <td align="right" valign="top">
+        <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:11.5px;color:#4B5563;">${nowDate}</p>
       </td>
     </tr></table>
   </td></tr>
 
+  <!-- ADDRESS BLOCK -->
+  <tr><td style="padding:24px 48px 0;">
+    <table cellpadding="0" cellspacing="0" border="0">
+      ${recipientTitle || recipientName ? `<tr><td style="font-family:${T.fontFamily},Arial,sans-serif;font-size:${T.fontSize}px;color:${T.bodyColor};line-height:1.6;padding-bottom:2px;">${[recipientTitle, recipientName].filter(Boolean).join(' ')}</td></tr>` : ''}
+      ${recipientOrg ? `<tr><td style="font-family:${T.fontFamily},Arial,sans-serif;font-size:${T.fontSize}px;color:${T.bodyColor};line-height:1.6;">${recipientOrg}</td></tr>` : ''}
+      ${recipientAddr ? `<tr><td style="font-family:${T.fontFamily},Arial,sans-serif;font-size:${T.fontSize}px;color:${T.bodyColor};line-height:1.6;">${recipientAddr}</td></tr>` : ''}
+    </table>
+  </td></tr>
+
   <!-- RE LINE -->
-  <tr><td style="background-color:${C.headerText};padding:0 48px 24px;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0">
-    <tr><td style="background-color:#EAF3F3;border-left:3px solid ${C.accentLine};padding:12px 16px;">
-      <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;font-weight:bold;color:#141C28;"><strong>Re:</strong> ${subj}</p>
-    </td></tr></table>
+  <tr><td style="padding:20px 48px 0;">
+    <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${T.fontSize}px;color:${T.bodyColor};line-height:${T.lineHeight};"><strong>Re: ${subj || item.name}</strong></p>
   </td></tr>
 
   <!-- BODY -->
-  <tr><td style="background-color:${C.headerText};padding:0 48px 32px;">
+  <tr><td style="padding:16px 48px 32px;">
     ${bodyParas}
   </td></tr>
 
-  ${kbSection ? `<tr><td style="padding:0 48px 24px;background:#FFFFFF;">${kbSection.replace('<tr><td style="padding:0 0 0 0;">','').replace('</td></tr>','')}</td></tr>` : ''}
+  <!-- SIGN-OFF -->
+  ${adviserName ? `<tr><td style="padding:0 48px 32px;">
+    <p style="margin:0 0 40px;font-family:${T.fontFamily},Arial,sans-serif;font-size:${T.fontSize}px;color:${T.bodyColor};">Yours sincerely,</p>
+    <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${T.fontSize}px;font-weight:600;color:${T.bodyColor};">${adviserName}</p>
+    ${adviserTitle ? `<p style="margin:2px 0 0;font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:#6B7280;">${adviserTitle}</p>` : ''}
+    <p style="margin:2px 0 0;font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:#6B7280;">${orgName}</p>
+  </td></tr>` : ''}
 
-  <!-- FOOTER RULE -->
-  <tr><td style="background-color:${C.footerBg};border-top:1px solid #E2E6EC;padding:14px 48px;">
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:${C.footerText};">Private &amp; Confidential</p>
-  </td></tr>
+  ${kbSection}
+
+  <!-- BOTTOM RULE -->
+  <tr><td height="4" style="background:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
 
 </table>
 </td></tr></table>`;
@@ -3268,44 +3296,25 @@ function outlookBody(item) {
 </td></tr></table>`;
 
   } else {
-    // Guide
-    const sections = rawBody.split(/\n(?=[A-Z][A-Z\s]{3,}\n)/).map((s,i) => {
-      const lines = s.trim().split('\n');
-      const heading = lines[0].trim();
-      const content = bodyToHtml(lines.slice(1).join('\n').trim());
-      return `
-    <tr><td style="padding:0 40px ${i===0?24:16}px;">
-      <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:10px;font-weight:bold;letter-spacing:0.1em;text-transform:uppercase;color:${C.footerText};">Section ${i+1}</p>
-      <p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;color:#141C28;border-bottom:2px solid #EAF3F3;padding-bottom:6px;">${heading}</p>
-      ${content}
-    </td></tr>`;
-    });
-
+    // Guide / checklist — clean document, no email header, section headings only
     return `
-<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F5F7">
-<tr><td align="center" style="padding:20px 10px;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:720px;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#FFFFFF">
+<tr><td align="center" style="padding:0;">
+<table width="680" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;font-family:${T.fontFamily},Arial,sans-serif;">
 
-  <!-- COVER -->
-  <tr><td style="background-color:${C.accentLine};padding:36px 40px;">
-    <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:10px;font-weight:bold;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.6);">Employment Relations Guide</p>
-    <p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:24px;font-weight:bold;color:${C.headerText};line-height:1.2;">${subj}</p>
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:rgba(255,255,255,0.65);">${nowDate}</p>
+  <!-- TITLE BLOCK -->
+  <tr><td style="padding:40px 56px 24px;border-bottom:2px solid ${C.accentLine};">
+    <p style="margin:0 0 6px;font-family:${T.fontFamily},Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:${C.accentLine};">${appSettings.orgName || 'Employment Relations'}</p>
+    <p style="margin:0 0 8px;font-family:${T.fontFamily},Arial,sans-serif;font-size:22px;font-weight:700;color:${T.bodyColor};line-height:1.25;">${subj || item.name}</p>
+    <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:#9CA3AF;">${nowDate}</p>
   </td></tr>
 
   <!-- BODY -->
-  <tr><td style="background-color:${C.headerText};padding-top:28px;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0">
-      ${sections.join('')}
-    </table>
+  <tr><td style="padding:28px 56px 40px;">
+    ${bodyParas}
   </td></tr>
 
   ${kbSection}
-
-  <!-- FOOTER -->
-  <tr><td style="background-color:${C.footerBg};border-top:1px solid #E2E6EC;padding:14px 40px;">
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:${C.footerText};">Employment Relations · Internal Use Only</p>
-  </td></tr>
 
 </table>
 </td></tr></table>`;
@@ -10493,6 +10502,152 @@ function populateSelect(id, key) {
   }
 }
 
+// ── CANDIDATES ────────────────────────────────────────────────────────────
+var DEFAULT_CANDIDATE_FIELDS = [
+  {id:'cand_name',    label:'Full Name',          type:'text',    width:'half', required:true,  group:'Personal'},
+  {id:'cand_preferred',label:'Preferred Name',   type:'text',    width:'half', required:false, group:'Personal'},
+  {id:'cand_pronouns',label:'Pronouns',           type:'select',  width:'half', required:false, group:'Personal',
+    options:['She / Her','He / Him','They / Them','She / They','He / They','Custom']},
+  {id:'cand_email',   label:'Email',              type:'text',    width:'half', required:false, group:'Personal'},
+  {id:'cand_phone',   label:'Phone',              type:'text',    width:'half', required:false, group:'Personal'},
+  {id:'cand_notice',  label:'Notice Period',      type:'text',    width:'half', required:false, group:'Application'},
+  {id:'cand_salary',  label:'Salary Expectation', type:'text',    width:'half', required:false, group:'Application'},
+  {id:'cand_role',    label:'Role Applied For',   type:'text',    width:'half', required:false, group:'Application'},
+  {id:'cand_stage',   label:'Stage',              type:'select',  width:'half', required:false, group:'Application',
+    options:['Applied','Shortlisted','Interviewing','Reference Check','Offered','Accepted','Rejected','Withdrawn']},
+  {id:'cand_notes',   label:'Notes',              type:'textarea',width:'full', required:false, group:'Application'},
+];
+
+function getCandidates(pipelineItemId) {
+  try {
+    var all = JSON.parse(localStorage.getItem('er_candidates') || '{}');
+    return pipelineItemId ? (all[pipelineItemId] || []) : all;
+  } catch(e) { return pipelineItemId ? [] : {}; }
+}
+function saveCandidates(pipelineItemId, candidates) {
+  try {
+    var all = JSON.parse(localStorage.getItem('er_candidates') || '{}');
+    all[pipelineItemId] = candidates;
+    localStorage.setItem('er_candidates', JSON.stringify(all));
+    fsSet('candidates', 'main', all);
+  } catch(e) {}
+}
+
+var editingCandidateId = null;
+var editingCandidateRoleId = null;
+
+function openCandidateModal(roleId, candidateId) {
+  editingCandidateRoleId = roleId;
+  editingCandidateId = candidateId || null;
+  var candidates = getCandidates(roleId);
+  var c = candidateId ? candidates.find(function(x){ return x.id === candidateId; }) : {};
+
+  var modal = document.getElementById('candidateModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'candidateModal';
+    modal.className = 'overlay';
+    document.body.appendChild(modal);
+  }
+
+  var fields = DEFAULT_CANDIDATE_FIELDS;
+  var sections = []; fields.forEach(function(f){ if(sections.indexOf(f.group)<0) sections.push(f.group); });
+
+  var html = sections.map(function(sec) {
+    var sf = fields.filter(function(f){ return f.group === sec; });
+    var rows = ''; var i = 0;
+    while(i < sf.length) {
+      var f = sf[i];
+      if(f.width === 'full') {
+        rows += '<div class="form-field" style="margin-bottom:8px;">' + renderCandidateField(f, c) + '</div>'; i++;
+      } else {
+        var nxt = sf[i+1];
+        if(nxt && nxt.width !== 'full') {
+          rows += '<div class="form-row"><div class="form-field">' + renderCandidateField(f,c) + '</div><div class="form-field">' + renderCandidateField(nxt,c) + '</div></div>';
+          i += 2;
+        } else { rows += '<div class="form-field" style="margin-bottom:8px;">' + renderCandidateField(f,c) + '</div>'; i++; }
+      }
+    }
+    return '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin:12px 0 8px;">' + sec + '</div>' + rows;
+  }).join('');
+
+  modal.innerHTML = '<div class="modal" style="width:580px;max-height:90vh;overflow-y:auto;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">'
+    + '<div class="modal-title" style="margin:0;">' + (candidateId ? 'Edit Candidate' : 'Add Candidate') + '</div>'
+    + (candidateId ? '<button class="btn btn-sm" style="color:var(--red);" onclick="deleteCandidate(\'' + roleId + '\',\'' + candidateId + '\')">Delete</button>' : '')
+    + '</div>' + html
+    + '<div class="modal-footer">'
+    + '<button class="btn" onclick="document.getElementById(\'candidateModal\').classList.remove(\'open\')">Cancel</button>'
+    + (candidateId ? '<button class="btn" onclick="promoteCandidateToPeople(\'' + roleId + '\',\'' + candidateId + '\')">→ Add to People</button>' : '')
+    + '<button class="btn btn-primary" onclick="saveCandidate()">Save</button>'
+    + '</div></div>';
+
+  modal.classList.add('open');
+}
+
+function renderCandidateField(f, c) {
+  var val = (c && c[f.id]) || '';
+  var label = '<label>' + f.label + (f.required ? ' <span style="color:var(--red);">*</span>' : '') + '</label>';
+  var id = 'cand_input_' + f.id;
+  if(f.type === 'textarea') return label + '<textarea id="' + id + '" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">' + val.replace(/</g,'&lt;') + '</textarea>';
+  if(f.type === 'select') {
+    var opts = '<option value="">— Select —</option>' + (f.options||[]).map(function(o){ return '<option' + (val===o?' selected':'') + '>' + o + '</option>'; }).join('');
+    return label + '<select id="' + id + '">' + opts + '</select>';
+  }
+  return label + '<input id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '" placeholder="' + (f.placeholder||f.label) + '">';
+}
+
+function saveCandidate() {
+  var fields = DEFAULT_CANDIDATE_FIELDS;
+  var missing = fields.filter(function(f){ return f.required && !(document.getElementById('cand_input_'+f.id)||{}).value; });
+  if(missing.length) { alert('Required: ' + missing.map(function(f){return f.label;}).join(', ')); return; }
+  var candidate = { id: editingCandidateId || ('cand_' + Date.now()), updated: todayStr() };
+  fields.forEach(function(f) {
+    var el = document.getElementById('cand_input_' + f.id);
+    candidate[f.id] = el ? el.value.trim() : '';
+  });
+  var candidates = getCandidates(editingCandidateRoleId);
+  var idx = candidates.findIndex(function(x){ return x.id === candidate.id; });
+  if(idx >= 0) candidates[idx] = candidate; else candidates.push(candidate);
+  saveCandidates(editingCandidateRoleId, candidates);
+  document.getElementById('candidateModal').classList.remove('open');
+  openPipelineDetail(editingCandidateRoleId);
+  toast('Candidate saved');
+}
+
+function deleteCandidate(roleId, candidateId) {
+  if(!confirm('Remove this candidate?')) return;
+  var candidates = getCandidates(roleId).filter(function(x){ return x.id !== candidateId; });
+  saveCandidates(roleId, candidates);
+  document.getElementById('candidateModal').classList.remove('open');
+  openPipelineDetail(roleId);
+  toast('Candidate removed');
+}
+
+function promoteCandidateToPeople(roleId, candidateId) {
+  var candidates = getCandidates(roleId);
+  var c = candidates.find(function(x){ return x.id === candidateId; });
+  if(!c) return;
+  if(!confirm('Add ' + (c.cand_name||'this candidate') + ' to People as an employee profile?')) return;
+
+  var person = {
+    id: 'p' + Date.now(), updated: todayStr(),
+    pf_fullname:  c.cand_name    || '',
+    pf_preferred: c.cand_preferred || '',
+    pf_pronouns:  c.cand_pronouns || '',
+    pf_email:     c.cand_email   || '',
+    pf_mobile:    c.cand_phone   || '',
+    pf_notes:     c.cand_notes   || '',
+    pf_position:  c.cand_role    || '',
+  };
+  var people = getPeople();
+  people.push(person);
+  savePeople(people);
+  document.getElementById('candidateModal').classList.remove('open');
+  document.getElementById('pipelineDetailModal').classList.remove('open');
+  toast((c.cand_name||'Candidate') + ' added to People');
+}
+
 // ── RECRUITMENT PIPELINE ──────────────────────────────────────────────────
 var PIPELINE_STAGES = [
   { id:'request',   label:'Position Request', color:'#64748B', bg:'#F1F5F9' },
@@ -10655,6 +10810,28 @@ function openPipelineDetail(id) {
   const assets = item.assets || [];
   const systems = item.systems || [];
 
+  const candidates = getCandidates(id);
+  const candidatesHtml = `
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);">Candidates (${candidates.length})</div>
+        <button class="btn btn-sm btn-primary" onclick="openCandidateModal('${id}')">+ Add candidate</button>
+      </div>
+      ${candidates.length ? candidates.map(function(c) {
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;cursor:pointer;"
+          onclick="openCandidateModal('${id}','${c.id}')">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">
+            ${(c.cand_name||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2)}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:var(--text);">${c.cand_name||'—'}</div>
+            <div style="font-size:11.5px;color:var(--text3);">${[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:'', c.cand_salary?c.cand_salary:''].filter(Boolean).join(' · ')}</div>
+          </div>
+          ${c.cand_stage ? `<span style="font-size:10.5px;padding:2px 8px;background:var(--teal-lt);color:var(--teal);border-radius:10px;border:1px solid var(--teal-mid);">${c.cand_stage}</span>` : ''}
+        </div>`;
+      }).join('') : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;padding:4px 0;">No candidates yet.</div>'}
+    </div>`;
+
   document.getElementById('pdBody').innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
       ${fields.map(([k,v]) => `<div style="padding:8px 12px;background:var(--bg);border-radius:var(--r-sm);">
@@ -10665,7 +10842,8 @@ function openPipelineDetail(id) {
     ${assets.length?`<div style="margin-bottom:10px;"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">Equipment</div><div style="display:flex;gap:5px;flex-wrap:wrap;">${assets.map(a=>`<span style="font-size:12px;background:var(--bg);border:1px solid var(--border);padding:2px 8px;border-radius:3px;">${a}</span>`).join('')}</div></div>`:''}
     ${systems.length?`<div style="margin-bottom:10px;"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">Systems Access</div><div style="display:flex;gap:5px;flex-wrap:wrap;">${systems.map(s=>`<span style="font-size:12px;background:var(--bg);border:1px solid var(--border);padding:2px 8px;border-radius:3px;">${s}</span>`).join('')}</div></div>`:''}
     ${item.notes?`<div style="padding:10px 14px;background:var(--teal-lt);border-radius:var(--r-sm);font-size:13px;color:var(--text2);font-style:italic;">${item.notes}</div>`:''}
-    ${item.stageHistory?.length?`<div style="margin-top:12px;"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">Stage History</div>${item.stageHistory.map(h=>`<div style="font-size:12px;color:var(--text2);">${h.date} → ${PIPELINE_STAGES.find(s=>s.id===h.stage)?.label||h.stage}</div>`).join('')}</div>`:''}`;
+    ${item.stageHistory?.length?`<div style="margin-top:12px;"><div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">Stage History</div>${item.stageHistory.map(h=>`<div style="font-size:12px;color:var(--text2);">${h.date} → ${PIPELINE_STAGES.find(s=>s.id===h.stage)?.label||h.stage}</div>`).join('')}</div>`:''}
+    ${candidatesHtml}`;
 
   const advBtn = document.getElementById('pdAdvanceBtn');
   if (nextStage) {
