@@ -9,13 +9,25 @@
 /* System font stack — DM Sans loaded below when online */
 body, button, input, select, textarea { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
 .brand-name, h1, h2 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+/* Attempt to use locally-installed Aptos (Office 365 / Windows 11) for template output */
+@font-face {
+  font-family: 'AptosLocal';
+  src: local('Aptos'), local('Aptos Display');
+  font-weight: normal;
+}
+@font-face {
+  font-family: 'AptosLocal';
+  src: local('Aptos Bold'), local('Aptos-Bold');
+  font-weight: bold;
+}
 </style>
 <script>
 // Load Google Fonts only when served over HTTP — never on file://
 if (location.protocol !== 'file:') {
   var _fl = document.createElement('link');
   _fl.rel = 'stylesheet';
-  _fl.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap';
+  // DM Sans as the guaranteed-consistent fallback that closely matches Aptos's proportions
+  _fl.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap';
   document.head.appendChild(_fl);
 }
 </script>
@@ -2953,7 +2965,7 @@ function outlookBody(item, forSend) {
   const C = resolveColours(item);
   const T = getTypography(); // global typography defaults
   // ff and fs defined at outlookBody scope — used in format wrappers and KB section
-  const ff = "'DM Sans',Aptos,Calibri,Arial,sans-serif";
+  const ff = "AptosLocal,'DM Sans',Aptos,Calibri,Arial,sans-serif";
   const fs = T.fontSize + 'px';
   const subj = (item.subject||'').replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k]||`[${k}]`);
   const fmt = item.format || 'email';
@@ -3053,7 +3065,7 @@ function outlookBody(item, forSend) {
     tmp.innerHTML = filled;
     let out = '';
     // Per-block overrides fall back to template colours
-    const ff = blockFontFam || "'DM Sans',Aptos,Calibri,Arial,sans-serif";
+    const ff = blockFontFam || "AptosLocal,'DM Sans',Aptos,Calibri,Arial,sans-serif";
     const fs = blockFontSz || (T.fontSize + 'px');
     const fc = blockCol || T.bodyColor;
     const nodes = tmp.childNodes.length ? tmp.childNodes : [tmp];
@@ -4559,13 +4571,13 @@ function toggleInternalPanel(tplId) {
 }
 function getTypography() {
   var t = (appSettings && appSettings.typography) ? appSettings.typography : {};
-  // Standard: DM Sans (loaded from Google Fonts) with Aptos as local fallback for Office users
-  // This ensures consistent rendering across all browsers and OS
+  // Template output standard: Aptos 11pt.
+  // 'AptosLocal' loads true Aptos if installed (Office/Win11), else DM Sans (web) matches closely.
   return {
-    fontFamily:   'DM Sans',
-    fontSize:     '13',        // px for CSS — matches 10pt standard
-    fontPt:       '10',
-    lineHeight:   t.lineHeight   || '1.6',
+    fontFamily:   "AptosLocal,'DM Sans',Aptos,Calibri,Arial,sans-serif",
+    fontSize:     '14',        // 11pt ≈ 14px (11 × 1.333)
+    fontPt:       '11',
+    lineHeight:   t.lineHeight   || '1.55',
     bodyColor:    t.bodyColor    || '#1A1A1A',
     headingColor: t.headingColor || '#1A6B6B',
   };
@@ -6796,14 +6808,21 @@ function renderFillField(f, fieldValues, itemId) {
   if (canonicalId === 'cf_startdate' || canonicalId === 'cf_enddate') fieldType = 'date';
 
   // Name-based date detection — handles "Interview Date & Time", "Meeting Date / Time" etc.
+  // This takes PRIORITY: if the field name clearly says date/time, use a picker regardless
+  // of what type was stored in the library (unless it's an explicit non-date type like select).
   const fKeyNorm = fKey.replace(/[&\/\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
   const hasDate = /\bdate\b/i.test(fKeyNorm);
   const hasTime = /\btime\b/i.test(fKeyNorm);
   const hasUpdate = /\bupdate\b/i.test(fKeyNorm);
   const isDateTimeByName = hasDate && hasTime;
   const isDateByName = hasDate && !hasTime && !hasUpdate;
-  if (isDateTimeByName && fieldType === 'text') fieldType = 'datetime';
-  else if (isDateByName && fieldType === 'text') fieldType = 'date';
+  // Only skip name detection if the library explicitly set a rich type (select/multiselect/checklist/yesno/number)
+  const richTypes = ['select','multiselect','checklist','yesno','number'];
+  const hasRichType = cfDef && richTypes.includes(cfDef.type);
+  if (!hasRichType) {
+    if (isDateTimeByName) fieldType = 'datetime';
+    else if (isDateByName) fieldType = 'date';
+  }
 
   const rawKey = '__raw_' + fKey;
   const timeKey = '__time_' + fKey;
@@ -8698,7 +8717,18 @@ function renderProfileFieldInput(f, p) {
   var id = 'pf_input_'+f.id;
   if(f.type==='textarea') return label+'<textarea id="'+id+'" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">'+val.replace(/</g,'&lt;')+'</textarea>';
   if(f.type==='date') return label+'<input type="date" id="'+id+'" value="'+val+'">';
+  if(f.type==='datetime') return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+(val.split(' ')[0]||'')+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
+  if(f.type==='number') return label+'<input type="number" id="'+id+'" value="'+val.replace(/"/g,'&quot;')+'">';
   if(f.type==='select'){var opts='<option value="">— Select —</option>'+(f.options||[]).map(function(o){return '<option value="'+o+'" '+(val===o?'selected':'')+'>'+o+'</option>';}).join('');return label+'<select id="'+id+'">'+opts+'</select>';}
+
+  // Auto-detect date/datetime from label
+  var pNorm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
+  var pHasDate = /\bdate\b/i.test(pNorm), pHasTime = /\btime\b/i.test(pNorm), pHasUpdate = /\bupdate\b/i.test(pNorm);
+  if (pHasDate && pHasTime)
+    return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+(val.split(' ')[0]||'')+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
+  if (pHasDate && !pHasUpdate)
+    return label+'<input type="date" id="'+id+'" value="'+val+'">';
+
   return label+'<input id="'+id+'" value="'+val.replace(/"/g,'&quot;')+'" placeholder="'+(f.placeholder||f.label)+'">';
 }
 
@@ -8707,7 +8737,18 @@ function savePerson() {
   var missing = fields.filter(function(f){return f.required&&!(document.getElementById('pf_input_'+f.id)||{}).value;});
   if(missing.length){alert('Required: '+missing.map(function(f){return f.label;}).join(', '));return;}
   var person = {id:editingPersonId||('p'+Date.now()), updated:todayStr()};
-  fields.forEach(function(f){var el=document.getElementById('pf_input_'+f.id);person[f.id]=el?el.value.trim():'';});
+  fields.forEach(function(f){
+    var el=document.getElementById('pf_input_'+f.id);
+    var timeEl=document.getElementById('pf_input_'+f.id+'_time');
+    if (timeEl) {
+      var d = el ? el.value : '', t = timeEl.value || '';
+      person[f.id] = d ? (t ? formatDateTimeValue(d,t) : formatDateValue(d)) : '';
+    } else if (el && el.type === 'date') {
+      person[f.id] = el.value ? formatDateValue(el.value) : '';
+    } else {
+      person[f.id]=el?el.value.trim():'';
+    }
+  });
   var people = getPeople(); var idx = people.findIndex(function(x){return x.id===person.id;});
   if(idx>=0) people[idx]=person; else people.push(person);
   savePeople(people);
@@ -11329,6 +11370,18 @@ function renderCandidateField(f, c) {
     var opts3 = '<option value="">— Select —</option>' + (f.options||[]).map(function(o){ return '<option' + (val===o?' selected':'') + '>' + o + '</option>'; }).join('');
     return label + '<select id="' + id + '">' + opts3 + '</select>';
   }
+  if(f.type === 'date') return label + '<input type="date" id="' + id + '" value="' + val + '">';
+  if(f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (val.split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (val.split(' ')[1]||'') + '" style="width:110px;"></div>';
+  if(f.type === 'number') return label + '<input type="number" id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '">';
+
+  // Auto-detect date/datetime from field label
+  var candNorm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
+  var cHasDate = /\bdate\b/i.test(candNorm), cHasTime = /\btime\b/i.test(candNorm), cHasUpdate = /\bupdate\b/i.test(candNorm);
+  if (cHasDate && cHasTime)
+    return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (val.split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (val.split(' ')[1]||'') + '" style="width:110px;"></div>';
+  if (cHasDate && !cHasUpdate)
+    return label + '<input type="date" id="' + id + '" value="' + val + '">';
+
   return label + '<input id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '" placeholder="' + (f.placeholder||f.label) + '">';
 }
 
@@ -11339,7 +11392,17 @@ function saveCandidate() {
   var candidate = { id: editingCandidateId || ('cand_' + Date.now()), updated: todayStr(), cand_roleId: editingCandidateRoleId };
   fields.forEach(function(f) {
     var el = document.getElementById('cand_input_' + f.id);
-    candidate[f.id] = el ? el.value.trim() : '';
+    var timeEl = document.getElementById('cand_input_' + f.id + '_time');
+    if (timeEl) {
+      // datetime field — combine date + time
+      var d = el ? el.value : '';
+      var t = timeEl.value || '';
+      candidate[f.id] = d ? (t ? formatDateTimeValue(d, t) : formatDateValue(d)) : '';
+    } else if (el && el.type === 'date') {
+      candidate[f.id] = el.value ? formatDateValue(el.value) : '';
+    } else {
+      candidate[f.id] = el ? el.value.trim() : '';
+    }
   });
   var candidates = getCandidates(editingCandidateRoleId);
   var idx = candidates.findIndex(function(x){ return x.id === candidate.id; });
