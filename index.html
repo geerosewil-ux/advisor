@@ -2982,9 +2982,9 @@ function outlookBody(item) {
     tmp.innerHTML = filled;
     let out = '';
     // Per-block overrides fall back to template colours
-    const ff = blockFontFam || (T.fontFamily + ',Arial,sans-serif');
+    const ff = blockFontFam || (T.fontFamily + ',Aptos,Arial,sans-serif');
     const fs = blockFontSz || (T.fontSize + 'px');
-    const fc = blockCol || T.bodyColor || C.bodyText;
+    const fc = blockCol || T.bodyColor;
     const nodes = tmp.childNodes.length ? tmp.childNodes : [tmp];
 
     var nodeToHtml = function(node) {
@@ -2995,7 +2995,7 @@ function outlookBody(item) {
       if (tag === 'h1') return `<p style="margin:16px 0 4px;font-family:${ff};font-size:18px;font-weight:bold;color:${C.bodyHeading};">${inner}</p>`;
       if (tag === 'h2') return `<p style="margin:14px 0 4px;font-family:${ff};font-size:13px;font-weight:bold;letter-spacing:0.06em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${inner}</p>`;
       if (tag === 'h3') return `<p style="margin:10px 0 3px;font-family:${ff};font-size:13px;font-weight:bold;color:${C.bodyText};">${inner}</p>`;
-      if (tag === 'p') return `<p style="margin:0 0 12px;font-family:${ff};font-size:${fs};line-height:${T.lineHeight||'1.75'};color:${fc};">${inner}</p>`;
+      if (tag === 'p') return `<p style="margin:0 0 12px;font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${inner}</p>`;
       if (tag === 'strong' || tag === 'b') return `<strong>${inner}</strong>`;
       if (tag === 'em' || tag === 'i') return `<em>${inner}</em>`;
       if (tag === 'u') return `<u>${inner}</u>`;
@@ -3088,15 +3088,20 @@ function outlookBody(item) {
     enabledBlocks.forEach((b, idx) => {
       if (b.type === 'text') {
         const hasAccent = b.bgColor && b.bgColor !== 'transparent' && b.bgColor !== '#ffffff' && b.bgColor !== 'white' && b.bgColor !== '';
-        // Block-level font override: only apply when explicitly different from global AND non-empty
+        // Block-level font override: only apply when block has explicit non-default setting
         const T = getTypography();
+        const globalFontPx = parseInt(T.fontSize) || 13;
         const globalFont = T.fontFamily;
         const bFont = b.fontFamily || '';
-        const bSize = b.fontSize || 0;
+        const bSizePt = b.fontSize || 0;
         const bColor = b.textColor || '';
-        const blockFontFamily = (bFont && bFont !== 'Inter' && bFont !== 'Arial' && bFont !== globalFont) ? bFont : '';
-        const blockFontSize = (bSize && bSize > 0 && bSize !== 10 && bSize !== 13) ? `${Math.round(bSize * 1.333)}px` : '';
-        const blockTextColor = (bColor && bColor !== '#1a1a1a' && bColor !== '#1A1A1A' && bColor !== T.bodyColor) ? bColor : '';
+        // Inherit font family unless explicitly different from global (treat Inter/Arial/'' as "use global")
+        const INHERIT_FONTS = ['', 'Inter', 'Arial', globalFont];
+        const blockFontFamily = (!INHERIT_FONTS.includes(bFont)) ? bFont : '';
+        // Convert pt→px; inherit if unset or same size as global
+        const blockSizePx = bSizePt > 0 ? Math.round(bSizePt * 1.333) : 0;
+        const blockFontSize = (blockSizePx > 0 && blockSizePx !== globalFontPx) ? `${blockSizePx}px` : '';
+        const blockTextColor = (bColor && bColor.toLowerCase() !== '#1a1a1a' && bColor !== T.bodyColor) ? bColor : '';
 
         const divider = idx > 0
           ? `<div style="border-top:0.5px solid #F0F0F0;margin:14px 0 12px;"></div>`
@@ -4477,8 +4482,8 @@ function toggleInternalPanel(tplId) {
 function getTypography() {
   var t = (appSettings && appSettings.typography) ? appSettings.typography : {};
   return {
-    fontFamily:   t.fontFamily   || 'Arial',
-    fontSize:     t.fontSize     || '14',
+    fontFamily:   t.fontFamily   || 'Aptos',
+    fontSize:     t.fontSize     || '13',
     lineHeight:   t.lineHeight   || '1.75',
     bodyColor:    t.bodyColor    || '#1A1A1A',
     headingColor: t.headingColor || '#1A6B6B',
@@ -10128,30 +10133,48 @@ function renderSettingsSection() {
       </div>`;
     return;
   }
+  if (settingsSection === 'peopleFields') { window._fbJourney = '__people__'; settingsSection = 'caseForms'; }
+  if (settingsSection === 'candidateFields') { window._fbJourney = '__candidates__'; settingsSection = 'caseForms'; }
+
   if (settingsSection === 'caseForms') {
     var fbJourney = window._fbJourney || 'onboarding';
     var journeyList = Object.values(LIFECYCLE_JOURNEYS||{}).map(function(j){return {id:j.id,label:j.label};});
+    // Add People and Candidates as special form types
+    journeyList = journeyList.concat([
+      {id:'__people__', label:'👥 People'},
+      {id:'__candidates__', label:'🧑‍💼 Candidates'},
+    ]);
     if (!journeyList.find(function(j){return j.id===fbJourney;}) && journeyList.length) fbJourney = journeyList[0].id;
-    var resolved = getCaseFormForJourney(fbJourney);
-    var rows = getJourneyForm(fbJourney);
-    var sections = [];
+
+    // Get the right fields for the selected form type
+    var resolved, rows, sections = [];
+    if (fbJourney === '__people__') {
+      resolved = getProfileFields().map(function(f){ return Object.assign({}, f, {section: f.group||'Personal'}); });
+      rows = resolved.map(function(f){ return {fid: f.id, section: f.section, width: f.width||'half', required: !!f.required, enabled: true}; });
+    } else if (fbJourney === '__candidates__') {
+      resolved = getCandidateFields().map(function(f){ return Object.assign({}, f, {section: f.group||'Application'}); });
+      rows = resolved.map(function(f){ return {fid: f.id, section: f.section, width: f.width||'half', required: !!f.required, enabled: true}; });
+    } else {
+      resolved = getCaseFormForJourney(fbJourney);
+      rows = getJourneyForm(fbJourney);
+    }
     resolved.forEach(function(f){ if (sections.indexOf(f.section)===-1) sections.push(f.section); });
 
     el.innerHTML = `
       <div class="settings-section-title">Form Builder</div>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6;">Compose each case type's form from your <a href="#" onclick="settingsSection='caseFields';renderSettings();return false;" style="color:var(--teal);">Case Fields library</a>. Click a field to edit its placement; hover for controls. This preview is exactly what the New Case form will look like.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6;">Compose forms from your <a href="#" onclick="settingsSection='caseFields';renderSettings();return false;" style="color:var(--teal);">Fields library</a>. Click a field to edit its placement. This preview matches the live form.</p>
 
       <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
         ${journeyList.map(j=>`<button class="btn btn-sm ${fbJourney===j.id?'btn-primary':''}" onclick="window._fbJourney='${j.id}';renderSettingsSection()">${j.label}</button>`).join('')}
         <span style="flex:1;"></span>
-        <select id="fbCopySrc" style="font-size:11.5px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;" onchange="fbCopyFrom('${fbJourney}',this.value);this.value=''">
+        ${fbJourney !== '__people__' && fbJourney !== '__candidates__' ? `<select id="fbCopySrc" style="font-size:11.5px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;" onchange="fbCopyFrom('${fbJourney}',this.value);this.value=''">
           <option value="">Copy from…</option>
-          ${journeyList.filter(j=>j.id!==fbJourney).map(j=>`<option value="${j.id}">${j.label}</option>`).join('')}
-        </select>
+          ${journeyList.filter(j=>j.id!==fbJourney&&!j.id.startsWith('__')).map(j=>`<option value="${j.id}">${j.label}</option>`).join('')}
+        </select>` : ''}
       </div>
 
       <div style="max-width:660px;background:white;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:28px 32px;">
-        <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px;">New Case — ${(LIFECYCLE_JOURNEYS[fbJourney]||{}).label||fbJourney}</div>
+        <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px;">${fbJourney==='__people__'?'People Profile':fbJourney==='__candidates__'?'Candidate Profile':'New Case — '+((LIFECYCLE_JOURNEYS[fbJourney]||{}).label||fbJourney)}</div>
         <div style="font-size:11.5px;color:var(--text3);margin-bottom:16px;">Live preview — click a field to edit its placement</div>
 
         ${sections.length ? sections.map(section => {
@@ -10400,7 +10423,7 @@ function renderSettingsSection() {
 
   if (settingsSection === 'appearance') {
     const typo = s.typography || {};
-    const fontFamilies = ['Inter','Aptos','Arial','Georgia','DM Sans','Calibri','Times New Roman'];
+    const fontFamilies = ['Aptos','Inter','Arial','Georgia','DM Sans','Calibri','Garamond','Times New Roman'];
     const fontSizes = ['10','11','12','13','14','16'];
     const lineHeights = [{'v':'1.4','l':'Compact (1.4)'},{'v':'1.6','l':'Normal (1.6)'},{'v':'1.75','l':'Default (1.75)'},{'v':'2','l':'Loose (2.0)'}];
 
@@ -10415,7 +10438,7 @@ function renderSettingsSection() {
           <div class="form-field" style="flex:2;margin:0;">
             <label>Font family</label>
             <select onchange="appSettings.typography=appSettings.typography||{};appSettings.typography.fontFamily=this.value;saveSettings();applyGlobalTypography()">
-              ${fontFamilies.map(f=>`<option value="${f}" ${(typo.fontFamily||'Inter')===f?'selected':''}>${f}</option>`).join('')}
+              ${fontFamilies.map(f=>`<option value="${f}" ${(typo.fontFamily||'Aptos')===f?'selected':''}>${f}</option>`).join('')}
             </select>
           </div>
           <div class="form-field" style="flex:1;margin:0;">
