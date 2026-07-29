@@ -3010,8 +3010,8 @@ function outlookBody(item) {
       const inner = Array.from(node.childNodes).map(nodeToHtml).join('');
 
       if (tag === 'h1') return `<p style="margin:16px 0 4px;font-family:${ff};font-size:18px;font-weight:bold;color:${C.bodyHeading};">${inner}</p>`;
-      if (tag === 'h2') return `<p style="margin:14px 0 4px;font-family:${ff};font-size:13px;font-weight:bold;letter-spacing:0.06em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${inner}</p>`;
-      if (tag === 'h3') return `<p style="margin:10px 0 3px;font-family:${ff};font-size:13px;font-weight:bold;color:${C.bodyText};">${inner}</p>`;
+      if (tag === 'h2') return `<p style="margin:14px 0 4px;font-family:${ff};font-size:${fs};font-weight:bold;letter-spacing:0.06em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${inner}</p>`;
+      if (tag === 'h3') return `<p style="margin:10px 0 3px;font-family:${ff};font-size:${fs};font-weight:bold;color:${C.bodyText};">${inner}</p>`;
       if (tag === 'p') return `<p style="margin:0 0 12px;font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${inner}</p>`;
       if (tag === 'strong' || tag === 'b') return `<strong>${inner}</strong>`;
       if (tag === 'em' || tag === 'i') return `<em>${inner}</em>`;
@@ -3126,7 +3126,7 @@ function outlookBody(item) {
 
         const labelColor = hasAccent ? '#1A6B6B' : '#9CA3AF';
         const label = b.label && b.label !== 'Greeting' && b.label !== 'Opening'
-          ? `<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:${labelColor};">${b.label}</p>`
+          ? `<p style="margin:0 0 6px;font-family:${T.fontFamily},Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:${labelColor};">${b.label}</p>`
           : '';
 
         const innerHtml = blockToOutlookHtml(
@@ -3147,11 +3147,11 @@ function outlookBody(item) {
 
       } else if (b.type === 'citations' && b.citations && b.citations.length) {
         bodyParas += `<div style="border-top:0.5px solid #F0F0F0;margin:14px 0 10px;"></div>`;
-        bodyParas += `<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#9CA3AF;">Legislative References</p>`;
+        bodyParas += `<p style="margin:0 0 6px;font-family:${T.fontFamily},Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#9CA3AF;">Legislative References</p>`;
         b.citations.forEach(c => {
           bodyParas += c.url
-            ? `<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:${C.bodyText};">§ <a href="${c.url}" style="color:${C.bodyHeading};">${c.text}</a></p>`
-            : `<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:${C.bodyText};">§ ${c.text}</p>`;
+            ? `<p style="margin:0 0 4px;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:${C.bodyText};">§ <a href="${c.url}" style="color:${C.bodyHeading};">${c.text}</a></p>`
+            : `<p style="margin:0 0 4px;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:${C.bodyText};">§ ${c.text}</p>`;
         });
       }
       // Attachments intentionally omitted from HTML output — they're real file attachments
@@ -3170,16 +3170,16 @@ function outlookBody(item) {
     <tr><td style="padding:0;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr><td style="background:#EAF3F3;border-left:3px solid ${C.accentLine};padding:14px 20px 8px;">
-          <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${C.bodyHeading};">Reference Material</p>
+          <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${C.bodyHeading};">Reference Material</p>
         </td></tr>
         ${linkedKb.map(kb => {
-          const urlLinks = (kb.urls||[]).map(u=>`<a href="${u.url}" style="font-family:Arial,sans-serif;font-size:11.5px;color:${C.bodyHeading};display:block;margin-top:4px;">${u.label||u.url}</a>`).join('');
-          const pdfLinks = (kb.pdfs||[]).map(p=>`<span style="font-family:Arial,sans-serif;font-size:11.5px;color:#B03A2E;display:block;margin-top:4px;">📎 ${p.name} (see attachment)</span>`).join('');
-          const legText = (kb.legislation||[]).map(l=>`<span style="font-family:Arial,sans-serif;font-size:11px;color:#4B5563;">${l.act}${l.section?' · '+l.section:''}</span>`).join('<br>');
+          const urlLinks = (kb.urls||[]).map(u=>`<a href="${u.url}" style="font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:${C.bodyHeading};display:block;margin-top:4px;">${u.label||u.url}</a>`).join('');
+          const pdfLinks = (kb.pdfs||[]).map(p=>`<span style="font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:#B03A2E;display:block;margin-top:4px;">📎 ${p.name} (see attachment)</span>`).join('');
+          const legText = (kb.legislation||[]).map(l=>`<span style="font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:#4B5563;">${l.act}${l.section?' · '+l.section:''}</span>`).join('<br>');
           return `<tr><td style="background:#F5FAFA;border-left:3px solid ${C.accentLine};padding:10px 20px 12px;border-top:1px solid #E2E6EC;">
-            <p style="margin:0 0 2px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#141C28;">${kb.title}</p>
-            ${legText ? `<p style="margin:0 0 6px;">${legText}</p>` : `<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:11px;color:${C.bodyHeading};">${kb.source||kb.category}</p>`}
-            <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:${C.bodyText};line-height:1.6;">${(kb.body||'').substring(0,350).replace(/\n/g,'<br>')}${(kb.body||'').length>350?'…':''}</p>
+            <p style="margin:0 0 2px;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};font-weight:bold;color:#141C28;">${kb.title}</p>
+            ${legText ? `<p style="margin:0 0 6px;">${legText}</p>` : `<p style="margin:0 0 6px;font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:${C.bodyHeading};">${kb.source||kb.category}</p>`}
+            <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:${C.bodyText};line-height:${T.lineHeight};">${(kb.body||'').substring(0,350).replace(/\n/g,'<br>')}${(kb.body||'').length>350?'…':''}</p>
             ${urlLinks}${pdfLinks}
           </td></tr>`;
         }).join('')}
@@ -3201,15 +3201,15 @@ function outlookBody(item) {
   <!-- ORG + DATE ROW -->
   <tr><td style="padding:14px 28px 10px;border-bottom:1px solid #F0F0F0;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td><p style="margin:0;font-family:Arial,sans-serif;font-size:10.5px;font-weight:700;color:#6B7280;letter-spacing:.06em;text-transform:uppercase;">${fromVal||'Employment Relations'}</p></td>
-      <td align="right"><p style="margin:0;font-family:Arial,sans-serif;font-size:10.5px;color:#9CA3AF;">${nowDate}</p></td>
+      <td><p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:10.5px;font-weight:700;color:#6B7280;letter-spacing:.06em;text-transform:uppercase;">${fromVal||'Employment Relations'}</p></td>
+      <td align="right"><p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:10.5px;color:#9CA3AF;">${nowDate}</p></td>
     </tr></table>
   </td></tr>
 
   <!-- RE LINE -->
   <tr><td style="padding:8px 28px 10px;border-bottom:1px solid #F5F5F5;">
-    ${toVal ? `<p style="margin:0 0 2px;font-family:Arial,sans-serif;font-size:11.5px;color:#6B7280;">To: <span style="color:#111827;font-weight:500;">${toVal}</span></p>` : ''}
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#4A5568;">Re: <strong style="color:#0F1724;">${subj||item.name}</strong>
+    ${toVal ? `<p style="margin:0 0 2px;font-family:${T.fontFamily},Arial,sans-serif;font-size:11.5px;color:#6B7280;">To: <span style="color:#111827;font-weight:500;">${toVal}</span></p>` : ''}
+    <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:#4A5568;">Re: <strong style="color:#0F1724;">${subj||item.name}</strong>
     <span style="margin-left:12px;font-size:10.5px;color:#9CA3AF;font-weight:400;">Private &amp; Confidential</span></p>
   </td></tr>
 
@@ -3245,7 +3245,7 @@ function outlookBody(item) {
   <tr><td style="padding:28px 48px 20px;border-bottom:1px solid #F0F0F0;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td>
-        <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:14px;font-weight:700;color:${C.accentLine};letter-spacing:.02em;">${orgName}</p>
+        <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};font-weight:700;color:${C.accentLine};letter-spacing:.02em;">${orgName}</p>
         <p style="margin:3px 0 0;font-family:${T.fontFamily},Arial,sans-serif;font-size:10.5px;color:#9CA3AF;letter-spacing:.06em;text-transform:uppercase;">Private &amp; Confidential</p>
       </td>
       <td align="right" valign="top">
@@ -3297,11 +3297,11 @@ function outlookBody(item) {
 
   <!-- COVER -->
   <tr><td style="background-color:${C.headerBg};padding:28px 36px;">
-    <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:10px;font-weight:bold;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.45);">Employment Relations · Advice Note</p>
-    <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:20px;font-weight:bold;color:${C.headerText};line-height:1.25;">${subj}</p>
+    <p style="margin:0 0 8px;font-family:${T.fontFamily},Arial,sans-serif;font-size:10px;font-weight:bold;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.45);">Employment Relations · Advice Note</p>
+    <p style="margin:0 0 16px;font-family:${T.fontFamily},Arial,sans-serif;font-size:20px;font-weight:bold;color:${C.headerText};line-height:1.25;">${subj}</p>
     <table cellpadding="0" cellspacing="0" border="0"><tr>
-      <td style="font-family:Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.5);padding-right:20px;">Date&nbsp;<strong style="color:rgba(255,255,255,0.85);">${nowDate}</strong></td>
-      ${item.leg ? `<td style="font-family:Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.5);">Reference&nbsp;<strong style="color:rgba(255,255,255,0.85);">${item.leg}</strong></td>` : ''}
+      <td style="font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.5);padding-right:20px;">Date&nbsp;<strong style="color:rgba(255,255,255,0.85);">${nowDate}</strong></td>
+      ${item.leg ? `<td style="font-family:${T.fontFamily},Arial,sans-serif;font-size:11px;color:rgba(255,255,255,0.5);">Reference&nbsp;<strong style="color:rgba(255,255,255,0.85);">${item.leg}</strong></td>` : ''}
     </tr></table>
   </td></tr>
 
@@ -3314,7 +3314,7 @@ function outlookBody(item) {
 
   <!-- DISCLAIMER -->
   <tr><td style="background-color:#EAF3F3;padding:14px 36px;">
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:${C.bodyHeading};line-height:1.5;"></p>
+    <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:${C.bodyHeading};line-height:1.5;"></p>
   </td></tr>
 
 </table>
@@ -4528,6 +4528,34 @@ function applyGlobalTypography() {
 }
 
 // ── PRONOUN SYSTEM ────────────────────────────────────────────────────────
+var DEFAULT_ROLE_FIELDS = [
+  {id:'rf_position',       label:'Position Title',      type:'text',     width:'full', required:true,  group:'Role Details'},
+  {id:'rf_classification', label:'Classification',      type:'text',     width:'half', required:false, group:'Role Details'},
+  {id:'rf_dept',           label:'Department',          type:'text',     width:'half', required:false, group:'Role Details'},
+  {id:'rf_emptype',        label:'Employment Type',     type:'select',   width:'half', required:false, group:'Role Details',
+    options:['Permanent Full-Time','Permanent Part-Time','Fixed Term Full-Time','Fixed Term Part-Time','Casual','Contractor']},
+  {id:'rf_hours',          label:'Hours per Week',      type:'number',   width:'half', required:false, group:'Role Details'},
+  {id:'rf_location',       label:'Location',            type:'location', width:'half', required:false, group:'Role Details'},
+  {id:'rf_manager',        label:'Reporting Manager',   type:'manager',  width:'half', required:false, group:'Role Details'},
+  {id:'rf_award',          label:'Award / Agreement',   type:'text',     width:'half', required:false, group:'Role Details'},
+  {id:'rf_probation',      label:'Probation Period',    type:'select',   width:'half', required:false, group:'Role Details',
+    options:['3 months','6 months','12 months','None']},
+  {id:'rf_startdate',      label:'Proposed Start Date', type:'date',     width:'half', required:false, group:'Approval'},
+  {id:'rf_enddate',        label:'Contract End Date',   type:'date',     width:'half', required:false, group:'Approval'},
+  {id:'rf_budget',         label:'Budget Code',         type:'text',     width:'half', required:false, group:'Approval'},
+  {id:'rf_approval',       label:'Approval Status',     type:'select',   width:'half', required:false, group:'Approval',
+    options:['Pending approval','Approved — proceed to recruit','Approved — direct engagement','On hold','Declined']},
+  {id:'rf_approvedby',     label:'Approved By',         type:'text',     width:'half', required:false, group:'Approval'},
+  {id:'rf_assets',         label:'Equipment Needed',    type:'textarea', width:'full', required:false, group:'Onboarding'},
+  {id:'rf_systems',        label:'Systems Access',      type:'textarea', width:'full', required:false, group:'Onboarding'},
+  {id:'rf_notes',          label:'Notes',               type:'textarea', width:'full', required:false, group:'Approval'},
+];
+
+function getRoleFields() {
+  return (appSettings.roleFields && appSettings.roleFields.length) ? appSettings.roleFields : JSON.parse(JSON.stringify(DEFAULT_ROLE_FIELDS));
+}
+function saveRoleFields(fields) { appSettings.roleFields = fields; saveSettings(); }
+
 // ── CANONICAL FIELD SYSTEM ───────────────────────────────────────────────
 // Each canonical field has a name (the source of truth) and a list of
 // placeholder aliases that resolve to it in templates.
@@ -6691,71 +6719,91 @@ function getAllPlaceholders() {
 // Render a field in fill mode based on its type
 function renderFillField(f, fieldValues, itemId) {
   const fSafe = f.replace(/'/g, "\\'");
+  const fKey = f.split('|')[0].trim(); // strip modifier
 
-  // Pronouns — special field with its own renderer
-  if (isPronounField(f)) {
-    return renderPronounField(fieldValues, itemId);
-  }
+  // Pronouns — special field
+  if (isPronounField(fKey)) return renderPronounField(fieldValues, itemId);
+  if (/^PRONOUN\//i.test(fKey)) return '';
 
-  // Pronoun sub-tags shown only when Custom pronouns selected — skip in main list
-  if (/^PRONOUN\//i.test(f)) return '';
+  // Determine field type — check library first, then canonical aliases, then name heuristics
+  const cfDef = getFieldLib().find(cf => cf.label.toUpperCase() === fKey.toUpperCase());
+  let fieldType = cfDef?.type || 'text';
 
-  // Check if this matches a field definition in the unified library
-  const cfDef = getFieldLib().find(cf => cf.label.toLowerCase() === f.toLowerCase());
-  const fieldType = cfDef?.type || 'text';
+  // Check canonical field for type hints
+  const canonicalId = resolveToCanonical(fKey);
+  if (canonicalId === 'cf_startdate' || canonicalId === 'cf_enddate') fieldType = 'date';
 
-  if (fieldType === 'date' || /^(date|deadline date|meeting date)$/i.test(f.trim()) && !/time/i.test(f)) {
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
+  // Name-based date detection as fallback
+  const isDateByName = /\bdate\b/i.test(fKey) && !/time/i.test(fKey) && !/update/i.test(fKey);
+  const isDateTimeByName = /\bdate\b/i.test(fKey) && /\btime\b/i.test(fKey);
+  if (isDateTimeByName) fieldType = 'datetime';
+  else if (isDateByName && fieldType === 'text') fieldType = 'date';
+
+  const rawKey = '__raw_' + fKey;
+  const timeKey = '__time_' + fKey;
+  const curRaw = fieldValues[rawKey] || '';
+  const curTime = fieldValues[timeKey] || '';
+  const curVal = fieldValues[fKey] || fieldValues[fKey.toUpperCase()] || '';
+
+  if (fieldType === 'date') {
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
       <div style="display:flex;gap:6px;align-items:center;">
-        <input type="date" class="field-input" style="max-width:160px;" value="${fieldValues['__raw_'+f]||''}" onchange="setDateField('${fSafe}',this.value,false,'${itemId}')">
-        ${fieldValues[f] ? `<span style="font-size:12px;color:var(--teal);">${fieldValues[f]}</span>` : ''}
+        <input type="date" class="field-input" style="max-width:160px;" value="${curRaw}"
+          onchange="setDateField('${fSafe}',this.value,false,'${itemId}')">
+        ${curVal ? `<span style="font-size:12px;color:var(--teal);font-weight:500;">${curVal}</span>` : ''}
       </div></div>`;
   }
-  if (fieldType === 'datetime' || (/time/i.test(f) && /date/i.test(f))) {
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
+  if (fieldType === 'datetime') {
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        <input type="date" class="field-input" style="max-width:160px;" value="${fieldValues['__raw_'+f]||''}" onchange="setDateField('${fSafe}',this.value,true,'${itemId}')">
-        <input type="time" class="field-input" style="max-width:110px;" value="${fieldValues['__time_'+f]||''}" onchange="setTimeField('${fSafe}',this.value,'${itemId}')">
-        ${fieldValues[f] ? `<span style="font-size:12px;color:var(--teal);">${fieldValues[f]}</span>` : ''}
+        <input type="date" class="field-input" style="max-width:160px;" value="${curRaw}"
+          onchange="setDateField('${fSafe}',this.value,true,'${itemId}')">
+        <input type="time" class="field-input" style="max-width:110px;" value="${curTime}"
+          onchange="setTimeField('${fSafe}',this.value,'${itemId}')">
+        ${curVal ? `<span style="font-size:12px;color:var(--teal);font-weight:500;">${curVal}</span>` : ''}
       </div></div>`;
   }
   if (fieldType === 'textarea') {
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
-      <textarea class="field-input" rows="3" placeholder="${f}" oninput="fieldValues['${fSafe}']=this.value;updatePreview('${itemId}')">${(fieldValues[f]||'').replace(/</g,'&lt;')}</textarea></div>`;
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
+      <textarea class="field-input" rows="3" placeholder="${fKey}"
+        oninput="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;updatePreview('${itemId}')">${(curVal).replace(/</g,'&lt;')}</textarea></div>`;
   }
   if (fieldType === 'number') {
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
-      <input type="number" class="field-input" style="max-width:140px;" value="${fieldValues[f]||''}" oninput="fieldValues['${fSafe}']=this.value;updatePreview('${itemId}')"></div>`;
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
+      <input type="number" class="field-input" style="max-width:140px;" value="${curVal}"
+        oninput="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;updatePreview('${itemId}')"></div>`;
   }
   if (fieldType === 'yesno') {
-    const cur = fieldValues[f] || '';
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
+    const cur = curVal;
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-sm ${cur==='Yes'?'btn-primary':''}" onclick="fieldValues['${fSafe}']='Yes';updatePreview('${itemId}');renderTemplateFields('${itemId}')">Yes</button>
-        <button class="btn btn-sm ${cur==='No'?'btn-primary':''}" onclick="fieldValues['${fSafe}']='No';updatePreview('${itemId}');renderTemplateFields('${itemId}')">No</button>
-        ${cur ? `<button class="btn btn-sm" onclick="delete fieldValues['${fSafe}'];updatePreview('${itemId}');renderTemplateFields('${itemId}')">Clear</button>` : ''}
+        <button class="btn btn-sm ${cur==='Yes'?'btn-primary':''}" onclick="fieldValues['${fSafe}']='Yes';fieldValues['${fSafe.toUpperCase()}']='Yes';updatePreview('${itemId}');renderTemplateFields('${itemId}')">Yes</button>
+        <button class="btn btn-sm ${cur==='No'?'btn-primary':''}" onclick="fieldValues['${fSafe}']='No';fieldValues['${fSafe.toUpperCase()}']='No';updatePreview('${itemId}');renderTemplateFields('${itemId}')">No</button>
+        ${cur ? `<button class="btn btn-sm" onclick="delete fieldValues['${fSafe}'];delete fieldValues['${fSafe.toUpperCase()}'];updatePreview('${itemId}');renderTemplateFields('${itemId}')">Clear</button>` : ''}
       </div></div>`;
   }
   if (fieldType === 'select' && cfDef?.options?.length) {
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
-      <select class="field-input" onchange="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;${isPronounField(f)?`setPronounSet(this.value,'${itemId}');`:''}updatePreview('${itemId}')">
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
+      <select class="field-input" onchange="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;${isPronounField(fKey)?`setPronounSet(this.value,'${itemId}');`:''}updatePreview('${itemId}')">
         <option value="">— Select —</option>
-        ${cfDef.options.map(o=>`<option value="${o}" ${fieldValues[f]===o||fieldValues[fSafe.toUpperCase()]===o?'selected':''}>${o}</option>`).join('')}
+        ${cfDef.options.map(o=>`<option value="${o}" ${curVal===o?'selected':''}>${o}</option>`).join('')}
       </select></div>`;
   }
   if (fieldType === 'multiselect' && cfDef?.options?.length) {
-    const selected = typeof fieldValues[f] === 'string' ? fieldValues[f].split(', ').filter(Boolean) : (fieldValues[f]||[]);
-    return `<div class="field-group"><div class="field-lbl">${f}</div>
+    const selected = typeof curVal === 'string' ? curVal.split(', ').filter(Boolean) : (curVal||[]);
+    const msCls = 'msFill_' + fSafe.replace(/[^a-z0-9]/gi,'_');
+    return `<div class="field-group"><div class="field-lbl">${fKey}</div>
       <div style="display:flex;flex-direction:column;gap:3px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">
         ${cfDef.options.map(o=>`<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;">
           <input type="checkbox" ${selected.includes(o)?'checked':''} style="accent-color:var(--teal);"
-            onchange="(function(){var sel=[...document.querySelectorAll('.msFill_${fSafe.replace(/[^a-z0-9]/gi,'_')} input:checked')].map(cb=>cb.value);var joined=sel.join(', ');fieldValues['${fSafe}']=joined;fieldValues['${fSafe.toUpperCase()}']=joined;updatePreview('${itemId}');})()" class="msFill_${fSafe.replace(/[^a-z0-9]/gi,'_')}">
+            onchange="(function(){var sel=[...document.querySelectorAll('.${msCls} input:checked')].map(cb=>cb.value);var j=sel.join(', ');fieldValues['${fSafe}']=j;fieldValues['${fSafe.toUpperCase()}']=j;updatePreview('${itemId}');})()" class="${msCls}">
           ${o}</label>`).join('')}
       </div></div>`;
   }
-  // Default: text input — store under both original case and uppercase
-  return `<div class="field-group"><div class="field-lbl">${f}</div>
-    <input class="field-input" placeholder="${f}" value="${(fieldValues[f]||fieldValues[f.toUpperCase()]||'').replace(/"/g,'&quot;')}" oninput="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;updatePreview('${itemId}')"></div>`;
+  // Default: text input
+  return `<div class="field-group"><div class="field-lbl">${fKey}</div>
+    <input class="field-input" placeholder="${fKey}" value="${curVal.replace(/"/g,'&quot;')}"
+      oninput="fieldValues['${fSafe}']=this.value;fieldValues['${fSafe.toUpperCase()}']=this.value;updatePreview('${itemId}')"></div>`;
 }
 
 // ── CASE FORM EDITOR FUNCTIONS ────────────────────────────────────────────
@@ -7918,6 +7966,7 @@ function getCaseFormForJourney(journeyId) {
   // Special form types — resolve directly
   if (journeyId === '__people__') return getProfileFields();
   if (journeyId === '__candidates__') return getCandidateFields();
+  if (journeyId === '__role__') return getRoleFields();
 
   var rows = getJourneyForm(journeyId);
   var lib = getCaseFieldLib();
@@ -8330,8 +8379,11 @@ function getJourneyForm(journeyId) {
       return { fid: f.id, section: f.group||'Application', required: !!f.required, width: f.width||'half', enabled: f.enabled !== false };
     });
   }
-
-  if (!appSettings.caseFormsByJourney) appSettings.caseFormsByJourney = {};
+  if (journeyId === '__role__') {
+    return getRoleFields().map(function(f){
+      return { fid: f.id, section: f.group||'Role Details', required: !!f.required, width: f.width||'half', enabled: f.enabled !== false };
+    });
+  } appSettings.caseFormsByJourney = {};
   var existing = appSettings.caseFormsByJourney[journeyId];
 
   if (!existing || !existing.length) {
@@ -8384,6 +8436,16 @@ function saveJourneyForm(journeyId, rows) {
       return Object.assign({}, base2, { group: r.section || base2.group || 'Application', required: !!r.required, width: r.width || base2.width || 'half', enabled: r.enabled !== false });
     });
     saveCandidateFields(updatedC);
+    return;
+  }
+  if (journeyId === '__role__') {
+    var existingR = getRoleFields();
+    var updatedR = rows.map(function(r) {
+      var baseR = existingR.find(function(f){ return f.id === r.fid; })
+        || { id: r.fid, label: r.fid, type: 'text' };
+      return Object.assign({}, baseR, { group: r.section || baseR.group || 'Role Details', required: !!r.required, width: r.width || baseR.width || 'half', enabled: r.enabled !== false });
+    });
+    saveRoleFields(updatedR);
     return;
   }
   if (!appSettings.caseFormsByJourney) appSettings.caseFormsByJourney = {};
@@ -10492,10 +10554,11 @@ function renderSettingsSection() {
   if (settingsSection === 'caseForms') {
     var fbJourney = window._fbJourney || 'onboarding';
     var journeyList = Object.values(LIFECYCLE_JOURNEYS||{}).map(function(j){return {id:j.id,label:j.label};});
-    // Add People and Candidates as special form types
+    // Add People, Candidates and Role as special form types
     journeyList = journeyList.concat([
-      {id:'__people__', label:'👥 People'},
+      {id:'__people__',     label:'👥 People'},
       {id:'__candidates__', label:'🧑‍💼 Candidates'},
+      {id:'__role__',       label:'📋 Role'},
     ]);
     if (!journeyList.find(function(j){return j.id===fbJourney;}) && journeyList.length) fbJourney = journeyList[0].id;
 
@@ -10506,6 +10569,9 @@ function renderSettingsSection() {
       rows = resolved.map(function(f){ return {fid: f.id, section: f.section, width: f.width||'half', required: !!f.required, enabled: true}; });
     } else if (fbJourney === '__candidates__') {
       resolved = getCandidateFields().map(function(f){ return Object.assign({}, f, {section: f.group||'Application'}); });
+      rows = resolved.map(function(f){ return {fid: f.id, section: f.section, width: f.width||'half', required: !!f.required, enabled: true}; });
+    } else if (fbJourney === '__role__') {
+      resolved = getRoleFields().map(function(f){ return Object.assign({}, f, {section: f.group||'Role Details'}); });
       rows = resolved.map(function(f){ return {fid: f.id, section: f.section, width: f.width||'half', required: !!f.required, enabled: true}; });
     } else {
       resolved = getCaseFormForJourney(fbJourney);
@@ -10527,7 +10593,7 @@ function renderSettingsSection() {
       </div>
 
       <div style="max-width:660px;background:white;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:28px 32px;">
-        <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px;">${fbJourney==='__people__'?'People Profile':fbJourney==='__candidates__'?'Candidate Profile':'New Case — '+((LIFECYCLE_JOURNEYS[fbJourney]||{}).label||fbJourney)}</div>
+        <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px;">${fbJourney==='__people__'?'People Profile':fbJourney==='__candidates__'?'Candidate Profile':fbJourney==='__role__'?'Role / Position Request':'New Case — '+((LIFECYCLE_JOURNEYS[fbJourney]||{}).label||fbJourney)}</div>
         <div style="font-size:11.5px;color:var(--text3);margin-bottom:16px;">Live preview — click a field to edit its placement</div>
 
         ${sections.length ? sections.map(section => {
@@ -10776,9 +10842,14 @@ function renderSettingsSection() {
 
   if (settingsSection === 'appearance') {
     const typo = s.typography || {};
-    const fontFamilies = ['Aptos','Inter','Arial','Georgia','DM Sans','Calibri','Garamond','Times New Roman'];
-    const fontSizes = ['8','9','10','11','12','14','16'];
+    const fontFamilies = ['Aptos'];
+    const fontSizes = ['10'];
     const lineHeights = [{'v':'1.4','l':'Compact (1.4)'},{'v':'1.6','l':'Normal (1.6)'},{'v':'1.75','l':'Comfortable (1.75)'},{'v':'2','l':'Loose (2.0)'}];
+    // Enforce Aptos 10pt as fixed standard — reset any stored deviation
+    if (!appSettings.typography || appSettings.typography.fontFamily !== 'Aptos' || appSettings.typography.fontSize !== '10') {
+      appSettings.typography = Object.assign(appSettings.typography||{}, {fontFamily:'Aptos', fontSize:'10'});
+      saveSettings();
+    }
 
     el.innerHTML = `<div class="settings-section">
       <h3>Appearance</h3>
