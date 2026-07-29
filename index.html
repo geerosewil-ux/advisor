@@ -2591,6 +2591,7 @@ function renderTemplate(item) {
   try {
   const rs = reviewStatus(item);
   const fields = extractFields(item.body, item.blocks, item.subject);
+  console.log('[renderTemplate] extracted fields:', JSON.stringify(fields));
   // Only initialise missing fields - never overwrite existing values with ''
   // Also check canonical aliases so pre-loaded values aren't blocked
   fields.forEach(f => {
@@ -2946,11 +2947,11 @@ function resolveColours(item) {
   return out;
 }
 
-function outlookBody(item) {
+function outlookBody(item, forSend) {
   const C = resolveColours(item);
   const T = getTypography(); // global typography defaults
-  // fs and ff defined at outlookBody scope — used in format wrappers and KB section
-  const ff = T.fontFamily + ',Aptos,Arial,sans-serif';
+  // ff and fs defined at outlookBody scope — used in format wrappers and KB section
+  const ff = "'DM Sans',Aptos,Calibri,Arial,sans-serif";
   const fs = T.fontSize + 'px';
   const subj = (item.subject||'').replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k]||`[${k}]`);
   const fmt = item.format || 'email';
@@ -3042,7 +3043,7 @@ function outlookBody(item) {
     tmp.innerHTML = filled;
     let out = '';
     // Per-block overrides fall back to template colours
-    const ff = blockFontFam || (T.fontFamily + ',Aptos,Arial,sans-serif');
+    const ff = blockFontFam || "'DM Sans',Aptos,Calibri,Arial,sans-serif";
     const fs = blockFontSz || (T.fontSize + 'px');
     const fc = blockCol || T.bodyColor;
     const nodes = tmp.childNodes.length ? tmp.childNodes : [tmp];
@@ -3251,12 +3252,12 @@ function outlookBody(item) {
     </tr></table>
   </td></tr>
 
-  <!-- RE LINE -->
+  ${forSend ? '' : `<!-- RE LINE — preview only, not in sent email -->
   <tr><td style="padding:8px 28px 10px;border-bottom:1px solid #F5F5F5;">
     ${toVal ? `<p style="margin:0 0 2px;font-family:${ff};font-size:11.5px;color:#6B7280;">To: <span style="color:#111827;font-weight:500;">${toVal}</span></p>` : ''}
     <p style="margin:0;font-family:${ff};font-size:${fs};color:#4A5568;">Re: <strong style="color:#0F1724;">${subj||item.name}</strong>
     <span style="margin-left:12px;font-size:10.5px;color:#9CA3AF;font-weight:400;">Private &amp; Confidential</span></p>
-  </td></tr>
+  </td></tr>`}
 
   <!-- BODY -->
   <tr><td style="background:#FFFFFF;padding:22px 28px 20px;">${bodyParas}</td></tr>
@@ -3433,7 +3434,7 @@ function updatePreview(id) {
 async function copyOutputRich() {
   const item = data.templates.find(i => i.id === selectedId);
   if (!item) return;
-  const innerHtml = outlookBody(item);
+  const innerHtml = outlookBody(item, true); // strip preview chrome for clipboard copy
   const fullDoc = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>${innerHtml}</body></html>`;
 
   try {
@@ -3529,7 +3530,7 @@ function downloadOft(id) {
   const item = data.templates.find(i => i.id === id);
   if (!item) { toast('Template not found'); return; }
   const subject = getRawText(item.subject||'');
-  const bodyHtml = outlookBody(item);
+  const bodyHtml = outlookBody(item, true); // forSend=true strips preview chrome (To/Re)
   const bodyText = document.getElementById('outputPreview')?.innerText || getRawText(item.body||'');
 
   // Collect attachments from enabled attachment blocks
@@ -4548,14 +4549,12 @@ function toggleInternalPanel(tplId) {
 }
 function getTypography() {
   var t = (appSettings && appSettings.typography) ? appSettings.typography : {};
-  // Always enforce Aptos 10pt — this is the locked standard
-  var fontPt = '10';
-  var fontFamily = 'Aptos';
-  var fontPx = '13'; // 10pt × 1.333 = 13.33 → 13px
+  // Standard: DM Sans (loaded from Google Fonts) with Aptos as local fallback for Office users
+  // This ensures consistent rendering across all browsers and OS
   return {
-    fontFamily:   fontFamily,
-    fontSize:     fontPx,
-    fontPt:       fontPt,
+    fontFamily:   'DM Sans',
+    fontSize:     '13',        // px for CSS — matches 10pt standard
+    fontPt:       '10',
     lineHeight:   t.lineHeight   || '1.6',
     bodyColor:    t.bodyColor    || '#1A1A1A',
     headingColor: t.headingColor || '#1A6B6B',
@@ -6794,6 +6793,9 @@ function renderFillField(f, fieldValues, itemId) {
   if (isDateTimeByName && fieldType === 'text') fieldType = 'datetime';
   else if (isDateByName && fieldType === 'text') fieldType = 'date';
 
+  if (fKey.toUpperCase().includes('DATE') || fKey.toUpperCase().includes('TIME')) {
+    console.log('[renderFillField]', JSON.stringify(fKey), '→ fKeyNorm:', JSON.stringify(fKeyNorm), '→ fieldType:', fieldType, '→ hasDate:', hasDate, '→ hasTime:', hasTime);
+  }
   const rawKey = '__raw_' + fKey;
   const timeKey = '__time_' + fKey;
   const curRaw = fieldValues[rawKey] || '';
