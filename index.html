@@ -3004,14 +3004,14 @@ function outlookBody(item) {
       if (tag === 'ul') {
         return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${
           Array.from(node.querySelectorAll('li')).map(li =>
-            `<tr><td width="18" valign="top" style="font-family:Arial,sans-serif;font-size:14px;color:${C.bodyHeading};padding-top:2px;">•</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.innerHTML}</td></tr>`
+            `<tr><td width="18" valign="top" style="font-family:${ff};font-size:${fs};color:${C.bodyHeading};padding-top:2px;">•</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${li.innerHTML}</td></tr>`
           ).join('')
         }</table>`;
       }
       if (tag === 'ol') {
         return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${
           Array.from(node.querySelectorAll('li')).map((li,i) =>
-            `<tr><td width="24" valign="top" style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;color:${C.bodyHeading};padding-top:2px;">${i+1}.</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.innerHTML}</td></tr>`
+            `<tr><td width="24" valign="top" style="font-family:${ff};font-size:${fs};font-weight:bold;color:${C.bodyHeading};padding-top:2px;">${i+1}.</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${li.innerHTML}</td></tr>`
           ).join('')
         }</table>`;
       }
@@ -3021,7 +3021,7 @@ function outlookBody(item) {
         const cb = node.querySelector('input[type="checkbox"]');
         const checked = cb && cb.checked ? '☑' : '☐';
         const text = node.textContent.replace(/^\s*/, '').trim();
-        return `<tr><td width="18" valign="top" style="font-family:Arial,sans-serif;font-size:14px;color:#4A5568;padding-top:2px;">${checked}</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${fc};">${text}</td></tr>`;
+        return `<tr><td width="18" valign="top" style="font-family:${ff};font-size:${fs};color:#4A5568;padding-top:2px;">${checked}</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${text}</td></tr>`;
       }
       if (tag === 'table') {
         // Pass through tables with inline styles
@@ -3029,7 +3029,7 @@ function outlookBody(item) {
           Array.from(node.querySelectorAll('tr')).map(tr =>
             `<tr>${Array.from(tr.querySelectorAll('th,td')).map(cell => {
               const isTh = cell.tagName.toLowerCase() === 'th';
-              return `<${isTh?'th':'td'} style="font-family:Arial,sans-serif;font-size:13px;${isTh?`background:${C.bodyHeading === C.accentLine ? '#EAF3F3' : '#f0f4f8'};color:${C.bodyHeading};font-weight:bold;`:`color:${C.bodyText};`}border:1px solid #E2E6EC;padding:6px 10px;text-align:left;">${cell.innerHTML}</${isTh?'th':'td'}>`;
+              return `<${isTh?'th':'td'} style="font-family:${ff};font-size:${fs};${isTh?`background:${C.bodyHeading === C.accentLine ? '#EAF3F3' : '#f0f4f8'};color:${C.bodyHeading};font-weight:bold;`:`color:${fc};`}border:1px solid #E2E6EC;padding:6px 10px;text-align:left;">${cell.innerHTML}</${isTh?'th':'td'}>`;
             }).join('')}</tr>`
           ).join('')
         }</table>`;
@@ -3044,12 +3044,12 @@ function outlookBody(item) {
         return `<span style="background:#FEF9C3;color:#B45309;border:1px solid #FDE68A;border-radius:3px;padding:1px 5px;font-style:italic;font-weight:500;font-size:.95em;">${kt}${mod?'|'+mod:''}</span>`;
       }
       // Fallback — wrap in paragraph if has text content
-      if (inner.trim()) return `<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${inner}</p>`;
+      if (inner.trim()) return `<p style="margin:0 0 12px;font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${inner}</p>`;
       return '';
     }
 
     Array.from(tmp.childNodes).forEach(n => { out += nodeToHtml(n); });
-    return out || `<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${filled.replace(/<[^>]+>/g,'')}</p>`;
+    return out || `<p style="margin:0 0 12px;font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${filled.replace(/<[^>]+>/g,'')}</p>`;
   }
 
   // Legacy plain-text renderer (used for old templates without blocks)
@@ -3061,18 +3061,19 @@ function outlookBody(item) {
         const lines = trimmed.split('\n');
         const heading = lines[0];
         const rest = lines.slice(1).join('\n').trim();
-        return `<p style="margin:16px 0 4px;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${heading}</p>`
-          + (rest ? `<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${rest.replace(/\n/g,'<br>')}</p>` : '');
+        return `<p style="margin:16px 0 4px;font-family:${getTypography().fontFamily},Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:0.08em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${heading}</p>`
+          + (rest ? `<p style="margin:0 0 12px;font-family:${getTypography().fontFamily},Arial,sans-serif;font-size:${getTypography().fontSize}px;line-height:${getTypography().lineHeight};color:${C.bodyText};">${rest.replace(/\n/g,'<br>')}</p>` : '');
       }
       if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*')) {
         const items = trimmed.split('\n').filter(l=>l.trim());
-        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map(li=>`<tr><td width="18" valign="top" style="font-family:Arial,sans-serif;font-size:14px;color:${C.bodyHeading};padding-top:1px;">•</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.replace(/^[•\-\*]\s*/,'')}</td></tr>`).join('')}</table>`;
+        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map(li=>`<tr><td width="18" valign="top" style="font-family:${getTypography().fontFamily},Arial,sans-serif;font-size:${getTypography().fontSize}px;color:${C.bodyHeading};padding-top:1px;">•</td><td style="font-family:${getTypography().fontFamily},Arial,sans-serif;font-size:${getTypography().fontSize}px;line-height:${getTypography().lineHeight};color:${C.bodyText};">${li.replace(/^[•\-\*]\s*/,'')}</td></tr>`).join('')}</table>`;
       }
       if (/^\d+\./.test(trimmed)) {
         const items = trimmed.split('\n').filter(l=>l.trim());
-        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map((li,i)=>`<tr><td width="24" valign="top" style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;color:${C.bodyHeading};padding-top:1px;">${i+1}.</td><td style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:${C.bodyText};">${li.replace(/^\d+\.\s*/,'')}</td></tr>`).join('')}</table>`;
+        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${items.map((li,i)=>`<tr><td width="24" valign="top" style="font-family:${getTypography().fontFamily},Arial,sans-serif;font-size:${getTypography().fontSize}px;font-weight:bold;color:${C.bodyHeading};padding-top:1px;">${i+1}.</td><td style="font-family:${getTypography().fontFamily},Arial,sans-serif;font-size:${getTypography().fontSize}px;line-height:${getTypography().lineHeight};color:${C.bodyText};">${li.replace(/^\d+\.\s*/,'')}</td></tr>`).join('')}</table>`;
       }
-      return `<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:${C.bodyText};">${trimmed.replace(/\n/g,'<br>')}</p>`;
+      const T2 = getTypography();
+      return `<p style="margin:0 0 14px;font-family:${T2.fontFamily},Arial,sans-serif;font-size:${T2.fontSize}px;line-height:${T2.lineHeight};color:${T2.bodyColor};">${trimmed.replace(/\n/g,'<br>')}</p>`;
     }).join('');
   }
 
