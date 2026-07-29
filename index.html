@@ -2591,7 +2591,6 @@ function renderTemplate(item) {
   try {
   const rs = reviewStatus(item);
   const fields = extractFields(item.body, item.blocks, item.subject);
-  console.log('[renderTemplate] extracted fields:', JSON.stringify(fields));
   // Only initialise missing fields - never overwrite existing values with ''
   // Also check canonical aliases so pre-loaded values aren't blocked
   fields.forEach(f => {
@@ -2670,7 +2669,10 @@ function renderTemplate(item) {
     </div>` : '';
 
   const fieldsHtml = fieldsToRender.length
-    ? fieldsToRender.map(f => f === '__PRONOUNS__' ? renderPronounField(fieldValues, item.id) : renderFillField(f, fieldValues, item.id)).join('')
+    ? fieldsToRender.map(f => {
+        const html = f === '__PRONOUNS__' ? renderPronounField(fieldValues, item.id) : renderFillField(f, fieldValues, item.id);
+        return html;
+      }).join('')
     : '<div style="font-size:12px;color:var(--text3);">No placeholder fields in this template yet.</div>';
 
   // Build case + people + candidate picker
@@ -2986,15 +2988,17 @@ function outlookBody(item, forSend) {
   }
 
   var resolvePh = function(kt, mod) {
+    // Decode any HTML entities in the key (e.g. &amp; → &)
+    var ktClean = kt.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ');
     // 1. Direct match (uppercase first — that's canonical storage)
-    var direct = fieldValues[kt.toUpperCase()] ?? fieldValues[kt] ?? fieldValues[kt.toLowerCase()];
+    var direct = fieldValues[ktClean.toUpperCase()] ?? fieldValues[ktClean] ?? fieldValues[ktClean.toLowerCase()];
     if (direct !== undefined && direct !== null && direct !== '') {
       var sv = Array.isArray(direct) ? direct.join(', ') : String(direct);
       if (/^\d{4}-\d{2}-\d{2}$/.test(sv.trim())) sv = formatDateValue(sv.trim());
       return applyModifier(sv, mod);
     }
-    // 2. Canonical alias resolution — {{COMMENCEMENT DATE}} resolves via alias map
-    var canonicalId = resolveToCanonical(kt);
+    // 2. Canonical alias resolution
+    var canonicalId = resolveToCanonical(ktClean);
     if (canonicalId) {
       var cv = fieldValues[canonicalId] ?? fieldValues[canonicalId.toUpperCase()];
       if (cv !== undefined && cv !== null && cv !== '') {
@@ -3003,7 +3007,7 @@ function outlookBody(item, forSend) {
       }
     }
     // 3. Pronoun tags
-    const pmap = PRONOUN_TAG_MAP[kt.toUpperCase()];
+    const pmap = PRONOUN_TAG_MAP[ktClean.toUpperCase()];
     if (pmap) {
       const ps = getPronouns();
       if (ps) return applyModifier(ps[pmap], mod);
@@ -3013,15 +3017,16 @@ function outlookBody(item, forSend) {
 
   var fillPh = function(str) {
     if (!str) return '';
+    function decK(raw) { return raw.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'"); }
     return str
       .replace(/\{\{([^}]+)\}\}/g, (_, raw) => {
-        const { key: kt, mod } = resolveKey(raw);
+        const { key: kt, mod } = resolveKey(decK(raw));
         const val = resolvePh(kt, mod);
         if (val !== null) return val;
         return `<span style="background:#FEF9C3;color:#B45309;border:1px solid #FDE68A;border-radius:3px;padding:1px 5px;font-style:italic;font-weight:500;font-size:.95em;">${kt}${mod ? '|'+mod : ''}</span>`;
       })
       .replace(/<span class="be-ph"[^>]*>(.*?)<\/span>/gi, (_, code) => {
-        const { key: kt, mod } = resolveKey(code.replace(/^\{\{|\}\}$/g, '').trim());
+        const { key: kt, mod } = resolveKey(decK(code.replace(/^\{\{|\}\}$/g, '').trim()));
         const val = resolvePh(kt, mod);
         if (val !== null) return val;
         return `<span style="background:#FEF9C3;color:#B45309;border:1px solid #FDE68A;border-radius:3px;padding:1px 5px;font-style:italic;font-weight:500;font-size:.95em;">${kt}${mod ? '|'+mod : ''}</span>`;
@@ -3038,7 +3043,12 @@ function outlookBody(item, forSend) {
 
   // ── Convert a block's rich HTML to Outlook-safe table HTML ───────────────
   var blockToOutlookHtml = function(htmlContent, blockFontFam, blockFontSz, blockCol) {
-    const filled = fillPh(htmlContent);
+    // Strip inline font-family and font-size styles baked in by the rich text editor
+    // so block-level and global typography settings win
+    const cleaned = (htmlContent || '')
+      .replace(/font-family\s*:[^;"}]+;?/gi, '')
+      .replace(/font-size\s*:[^;"}]+;?/gi, '');
+    const filled = fillPh(cleaned);
     const tmp = document.createElement('div');
     tmp.innerHTML = filled;
     let out = '';
@@ -6768,7 +6778,9 @@ function getAllPlaceholders() {
 
 // Render a field in fill mode based on its type
 function renderFillField(f, fieldValues, itemId) {
-  const fKey = f.split('|')[0].trim(); // strip modifier — this is the canonical storage key
+  // Decode HTML entities that may have survived from block content
+  const fKey = f.split('|')[0].trim()
+    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
   const fSafe = fKey.replace(/'/g, "\\'"); // always use stripped key for storage
 
   // Pronouns — special field
@@ -6793,9 +6805,6 @@ function renderFillField(f, fieldValues, itemId) {
   if (isDateTimeByName && fieldType === 'text') fieldType = 'datetime';
   else if (isDateByName && fieldType === 'text') fieldType = 'date';
 
-  if (fKey.toUpperCase().includes('DATE') || fKey.toUpperCase().includes('TIME')) {
-    console.log('[renderFillField]', JSON.stringify(fKey), '→ fKeyNorm:', JSON.stringify(fKeyNorm), '→ fieldType:', fieldType, '→ hasDate:', hasDate, '→ hasTime:', hasTime);
-  }
   const rawKey = '__raw_' + fKey;
   const timeKey = '__time_' + fKey;
   const curRaw = fieldValues[rawKey] || '';
@@ -7352,8 +7361,18 @@ function renderCfFieldInput(f) {
           + (p.pf_fullname||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
       }).join('');
       return label + '<select id="cf_input_' + f.id + '">' + mgrOpts + '</select>';
-    default:
+    default: {
+      // Auto-detect date/datetime from label when type is generic text
+      var norm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
+      var hasD = /\bdate\b/i.test(norm);
+      var hasT = /\btime\b/i.test(norm);
+      var hasU = /\bupdate\b/i.test(norm);
+      if (hasD && hasT)
+        return label + '<div style="display:flex;gap:6px;"><input type="date" id="cf_input_' + f.id + '"><input type="time" id="cf_input_' + f.id + '_time" style="width:110px;"></div>';
+      if (hasD && !hasT && !hasU)
+        return label + '<input type="date" id="cf_input_' + f.id + '">';
       return label + '<input id="cf_input_' + f.id + '" placeholder="' + (f.placeholder||'') + '">';
+    }
   }
 }
 
@@ -7376,24 +7395,35 @@ function getCaseFormValues(journeyId) {
       return;
     }
     var val = '';
-    if (f.type === 'checklist') {
+    // Auto-detect date/datetime from label when type is generic text
+    var effectiveType = f.type || 'text';
+    if (effectiveType === 'text') {
+      var norm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
+      if (/\bdate\b/i.test(norm) && /\btime\b/i.test(norm)) effectiveType = 'datetime';
+      else if (/\bdate\b/i.test(norm) && !/\bupdate\b/i.test(norm)) effectiveType = 'date';
+    }
+
+    if (effectiveType === 'checklist') {
       var checked = [];
       (f.options||[]).forEach(function(o, i) {
         var cb = document.getElementById('cf_input_' + f.id + '_' + i);
         if (cb && cb.checked) checked.push(o);
       });
       val = checked.join(', ');
-    } else if (f.type === 'multiselect') {
+    } else if (effectiveType === 'multiselect') {
       var cbs = document.querySelectorAll('.cfms_' + f.id + ':checked');
       val = Array.from(cbs).map(function(cb){return cb.value;}).join(', ');
-    } else if (f.type === 'yesno') {
+    } else if (effectiveType === 'yesno') {
       var yes = document.getElementById('cf_input_' + f.id + '_yes');
       var no  = document.getElementById('cf_input_' + f.id + '_no');
       val = yes?.checked ? 'Yes' : no?.checked ? 'No' : '';
-    } else if (f.type === 'datetime') {
+    } else if (effectiveType === 'datetime') {
       var d = document.getElementById('cf_input_' + f.id)?.value || '';
       var t = document.getElementById('cf_input_' + f.id + '_time')?.value || '';
-      val = d + (t ? ' ' + t : '');
+      val = d ? (t ? formatDateTimeValue(d, t) : formatDateValue(d)) : '';
+    } else if (effectiveType === 'date') {
+      var dval = document.getElementById('cf_input_' + f.id)?.value || '';
+      val = dval ? formatDateValue(dval) : '';
     } else {
       val = document.getElementById('cf_input_' + f.id)?.value?.trim() || '';
     }
