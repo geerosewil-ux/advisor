@@ -2578,6 +2578,7 @@ function getRawText(body) {
 
 // ── TEMPLATE RENDER ───────────────────────────────────────────────────────
 function renderTemplate(item) {
+  try {
   const rs = reviewStatus(item);
   const fields = extractFields(item.body, item.blocks, item.subject);
   // Only initialise missing fields - never overwrite existing values with ''
@@ -2664,11 +2665,17 @@ function renderTemplate(item) {
   // Build case + people + candidate picker
   const allCases = loadCases();
   const allPeople = getPeople();
-  const allCandidatesRaw = getCandidates(); // keyed by roleId
-  const allCandidates = Object.entries(allCandidatesRaw).flatMap(([roleId, cands]) => {
-    const role = loadPipeline().find(r => r.id === roleId);
-    return cands.map(c => ({ ...c, cand_roleId: roleId, _roleLabel: role ? role.position : '' }));
-  });
+  let allCandidates = [];
+  try {
+    const allCandidatesRaw = getCandidates(); // keyed by roleId
+    if (allCandidatesRaw && typeof allCandidatesRaw === 'object' && !Array.isArray(allCandidatesRaw)) {
+      allCandidates = Object.entries(allCandidatesRaw).flatMap(([roleId, cands]) => {
+        if (!Array.isArray(cands)) return [];
+        const role = loadPipeline().find(r => r.id === roleId);
+        return cands.map(c => ({ ...c, cand_roleId: roleId, _roleLabel: role ? role.position : '' }));
+      });
+    }
+  } catch(e) { console.warn('getCandidates error in renderTemplate:', e); }
 
   const casePickerHtml = (allCases.length || allPeople.length || allCandidates.length) ? `
     <div style="display:flex;flex-direction:column;gap:6px;padding:10px 14px;background:var(--teal-lt);border-radius:var(--r-sm);margin-bottom:16px;">
@@ -2884,6 +2891,15 @@ function renderTemplate(item) {
 
   updatePreview(item.id);
   setTimeout(() => renderFieldProfilesBar(item.id), 50);
+  } catch(e) {
+    console.error('renderTemplate error:', e);
+    const mc = document.getElementById('mainContent');
+    if (mc) mc.innerHTML = `<div style="padding:24px;color:var(--red);">
+      <strong>Template render error</strong><br><br>
+      ${e.message}<br><br>
+      <pre style="font-size:10px;white-space:pre-wrap;background:var(--bg);padding:10px;border-radius:4px;">${(e.stack||'').slice(0,500)}</pre>
+    </div>`;
+  }
 }
 
 function updateLiveSubject(tplId, val) {
@@ -2923,6 +2939,9 @@ function resolveColours(item) {
 function outlookBody(item) {
   const C = resolveColours(item);
   const T = getTypography(); // global typography defaults
+  // fs and ff defined at outlookBody scope — used in format wrappers and KB section
+  const ff = T.fontFamily + ',Aptos,Arial,sans-serif';
+  const fs = T.fontSize + 'px';
   const subj = (item.subject||'').replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k]||`[${k}]`);
   const fmt = item.format || 'email';
   const nowDate = new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'});
@@ -3383,14 +3402,18 @@ function updatePreview(id) {
   if (!item) return;
   const preview = document.getElementById('outputPreview');
   if (!preview) return;
-  // DEBUG: show what fieldValues contains
   const dbg = document.getElementById('_fvDebug');
   if (dbg) {
     const entries = Object.keys(fieldValues).filter(k => !k.startsWith('__')).map(k => `<div style="font-size:10px;padding:1px 0;"><b>${k}</b>: ${JSON.stringify(fieldValues[k]).slice(0,60)}</div>`).join('');
     dbg.innerHTML = entries || '<em style="font-size:10px;color:#999;">fieldValues is empty</em>';
   }
-  const outlookHtml = outlookBody(item);
-  preview.innerHTML = `<div style="transform-origin:top left;max-width:100%;overflow:hidden;">${outlookHtml}</div>`;
+  try {
+    const outlookHtml = outlookBody(item);
+    preview.innerHTML = `<div style="transform-origin:top left;max-width:100%;overflow:hidden;">${outlookHtml}</div>`;
+  } catch(e) {
+    console.error('outlookBody error:', e);
+    preview.innerHTML = `<div style="padding:20px;color:var(--red);font-size:12px;"><strong>Preview error:</strong> ${e.message}<br><pre style="font-size:10px;margin-top:8px;white-space:pre-wrap;">${e.stack||''}</pre></div>`;
+  }
 }
 
 // ── COPY AS RICH HTML (paste into Outlook) ────────────────────────────────
@@ -4606,24 +4629,24 @@ function saveCanonicalFields(fields) {
   saveSettings();
 }
 
-// Build a fast lookup: ALIAS (uppercase) → canonical field id
 function buildAliasMap() {
   var map = {};
-  getCanonicalFields().forEach(function(cf) {
-    // The canonical label itself is also an alias
-    map[cf.label.toUpperCase()] = cf.id;
-    (cf.aliases || []).forEach(function(a) {
-      map[a.toUpperCase().trim()] = cf.id;
+  try {
+    getCanonicalFields().forEach(function(cf) {
+      map[cf.label.toUpperCase()] = cf.id;
+      (cf.aliases || []).forEach(function(a) {
+        map[a.toUpperCase().trim()] = cf.id;
+      });
     });
-  });
+  } catch(e) {}
   return map;
 }
 
-// Resolve a template placeholder key to its canonical field id
-// Returns null if no mapping found
 function resolveToCanonical(placeholderKey) {
-  var map = buildAliasMap();
-  return map[placeholderKey.toUpperCase().trim()] || null;
+  try {
+    var map = buildAliasMap();
+    return map[placeholderKey.toUpperCase().trim()] || null;
+  } catch(e) { return null; }
 }
 
 // ── FIELD INHERITANCE SYSTEM ─────────────────────────────────────────────
