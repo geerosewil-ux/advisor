@@ -2647,13 +2647,19 @@ function renderTemplate(item) {
     ? fieldsToRender.map(f => f === '__PRONOUNS__' ? renderPronounField(fieldValues, item.id) : renderFillField(f, fieldValues, item.id)).join('')
     : '<div style="font-size:12px;color:var(--text3);">No placeholder fields in this template yet.</div>';
 
-  // Build case + people picker options
+  // Build case + people + candidate picker
   const allCases = loadCases();
   const allPeople = getPeople();
-  const casePickerHtml = (allCases.length || allPeople.length) ? `
+  const allCandidatesRaw = getCandidates(); // keyed by roleId
+  const allCandidates = Object.entries(allCandidatesRaw).flatMap(([roleId, cands]) => {
+    const role = loadPipeline().find(r => r.id === roleId);
+    return cands.map(c => ({ ...c, cand_roleId: roleId, _roleLabel: role ? role.position : '' }));
+  });
+
+  const casePickerHtml = (allCases.length || allPeople.length || allCandidates.length) ? `
     <div style="display:flex;flex-direction:column;gap:6px;padding:10px 14px;background:var(--teal-lt);border-radius:var(--r-sm);margin-bottom:16px;">
       ${allCases.length ? `<div style="display:flex;align-items:center;gap:8px;">
-        <svg style="width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <svg style="width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         <span style="font-size:12px;font-weight:600;color:var(--teal);flex-shrink:0;">From case:</span>
         <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12px;background:white;color:var(--text);outline:none;" onchange="setActiveCase(this.value,'${item.id}')">
           <option value="">— None —</option>
@@ -2661,12 +2667,14 @@ function renderTemplate(item) {
         </select>
         ${activeCaseId ? `<span style="font-size:11px;color:var(--teal);">✓ pre-filled</span>` : ''}
       </div>` : ''}
-      ${allPeople.length ? `<div style="display:flex;align-items:center;gap:8px;">
+      ${allPeople.length || allCandidates.length ? `<div style="display:flex;align-items:center;gap:8px;">
         <svg style="width:13px;height:13px;stroke:var(--teal);fill:none;stroke-width:2;flex-shrink:0;" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <span style="font-size:12px;font-weight:600;color:var(--teal);flex-shrink:0;">From people:</span>
-        <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12px;background:white;color:var(--text);outline:none;" onchange="loadPersonIntoTemplate(this.value,'${item.id}');this.value=''">
-          <option value="">— Select person —</option>
-          ${allPeople.map(p => `<option value="${p.id}">${p.pf_fullname||'—'}${p.pf_position?' · '+p.pf_position:''}</option>`).join('')}
+        <span style="font-size:12px;font-weight:600;color:var(--teal);flex-shrink:0;">From:</span>
+        <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12px;background:white;color:var(--text);outline:none;"
+          onchange="(function(sel){var v=sel.value;if(!v)return;var parts=v.split(':');loadEntityIntoTemplate(parts[1],parts[0],'${item.id}');sel.value=''})(this)">
+          <option value="">— Select person or candidate —</option>
+          ${allPeople.length ? `<optgroup label="People">${allPeople.map(p => `<option value="people:${p.id}">${p.pf_fullname||'—'}${p.pf_position?' · '+p.pf_position:''}</option>`).join('')}</optgroup>` : ''}
+          ${allCandidates.length ? `<optgroup label="Candidates">${allCandidates.map(c => `<option value="candidate:${c.id}">${c.cand_name||'—'}${c._roleLabel?' · '+c._roleLabel:''} (candidate)</option>`).join('')}</optgroup>` : ''}
         </select>
       </div>` : ''}
     </div>` : '';
@@ -2934,14 +2942,23 @@ function outlookBody(item) {
   }
 
   var resolvePh = function(kt, mod) {
-    // Try uppercase first (that's what we store under), then exact, then lowercase
+    // 1. Direct match (uppercase first — that's canonical storage)
     var direct = fieldValues[kt.toUpperCase()] ?? fieldValues[kt] ?? fieldValues[kt.toLowerCase()];
     if (direct !== undefined && direct !== null && direct !== '') {
       var sv = Array.isArray(direct) ? direct.join(', ') : String(direct);
       if (/^\d{4}-\d{2}-\d{2}$/.test(sv.trim())) sv = formatDateValue(sv.trim());
       return applyModifier(sv, mod);
     }
-    // Pronoun tags — resolve from set
+    // 2. Canonical alias resolution — {{COMMENCEMENT DATE}} resolves via alias map
+    var canonicalId = resolveToCanonical(kt);
+    if (canonicalId) {
+      var cv = fieldValues[canonicalId] ?? fieldValues[canonicalId.toUpperCase()];
+      if (cv !== undefined && cv !== null && cv !== '') {
+        var sv2 = Array.isArray(cv) ? cv.join(', ') : String(cv);
+        return applyModifier(sv2, mod);
+      }
+    }
+    // 3. Pronoun tags
     const pmap = PRONOUN_TAG_MAP[kt.toUpperCase()];
     if (pmap) {
       const ps = getPronouns();
@@ -4511,6 +4528,241 @@ function applyGlobalTypography() {
 }
 
 // ── PRONOUN SYSTEM ────────────────────────────────────────────────────────
+// ── CANONICAL FIELD SYSTEM ───────────────────────────────────────────────
+// Each canonical field has a name (the source of truth) and a list of
+// placeholder aliases that resolve to it in templates.
+// e.g. {{COMMENCEMENT DATE}} and {{START DATE}} both resolve to 'Start Date'
+
+var DEFAULT_CANONICAL_FIELDS = [
+  { id:'cf_fullname',    label:'Full Name',            aliases:['EMPLOYEE NAME','FULL NAME','RECIPIENT NAME','STAFF NAME','WORKER NAME','EMPLOYEE FULL NAME'] },
+  { id:'cf_preferred',   label:'Preferred Name',       aliases:['PREFERRED NAME','FIRST NAME','GIVEN NAME'] },
+  { id:'cf_pronouns',    label:'Pronouns',             aliases:['PRONOUNS','PRONOUN SET'] },
+  { id:'cf_position',    label:'Position / Role Title',aliases:['POSITION','POSITION TITLE','ROLE TITLE','JOB TITLE','ROLE','JOB ROLE','POSITION NAME'] },
+  { id:'cf_department',  label:'Department',           aliases:['DEPARTMENT','DEPT','TEAM','BUSINESS UNIT','DIVISION'] },
+  { id:'cf_emptype',     label:'Employment Type',      aliases:['EMPLOYMENT TYPE','EMP TYPE','CONTRACT TYPE','ENGAGEMENT TYPE'] },
+  { id:'cf_startdate',   label:'Start Date',           aliases:['START DATE','COMMENCEMENT DATE','COMMENCEMENT OF EMPLOYMENT','DATE OF COMMENCEMENT','EMPLOYMENT START DATE','DATE OF EMPLOYMENT','ENGAGEMENT DATE'] },
+  { id:'cf_enddate',     label:'End Date',             aliases:['END DATE','CONTRACT END DATE','TERMINATION DATE','CESSATION DATE','LAST DAY','FINAL DAY OF EMPLOYMENT','FINAL WORKING DATE','FINAL DAY'] },
+  { id:'cf_manager',     label:'Manager',              aliases:['MANAGER','MANAGER NAME','DIRECT MANAGER','REPORTING MANAGER','LINE MANAGER','SUPERVISOR'] },
+  { id:'cf_location',    label:'Location',             aliases:['LOCATION','OFFICE LOCATION','WORK LOCATION','SITE','WORKPLACE'] },
+  { id:'cf_email',       label:'Work Email',           aliases:['WORK EMAIL','EMAIL','EMAIL ADDRESS','EMPLOYEE EMAIL'] },
+  { id:'cf_organisation',label:'Organisation Name',    aliases:['ORGANISATION','ORGANIZATION','ORGANISATION NAME','EMPLOYER NAME','COMPANY NAME','EMPLOYER'] },
+  { id:'cf_adviser',     label:'ER Adviser',           aliases:['ER ADVISER','ER CONTACT','HR ADVISER','HR CONTACT','ADVISER NAME','ADVISOR'] },
+  { id:'cf_adviser_title',label:'Adviser Title',       aliases:['YOUR TITLE','ADVISER TITLE','HR TITLE','ER TITLE'] },
+  { id:'cf_adviser_email',label:'Adviser Email',       aliases:['ER EMAIL','ADVISER EMAIL','HR EMAIL'] },
+];
+
+function getCanonicalFields() {
+  if (!appSettings.canonicalFields || !appSettings.canonicalFields.length) {
+    appSettings.canonicalFields = JSON.parse(JSON.stringify(DEFAULT_CANONICAL_FIELDS));
+    saveSettings();
+  }
+  return appSettings.canonicalFields;
+}
+
+function saveCanonicalFields(fields) {
+  appSettings.canonicalFields = fields;
+  saveSettings();
+}
+
+// Build a fast lookup: ALIAS (uppercase) → canonical field id
+function buildAliasMap() {
+  var map = {};
+  getCanonicalFields().forEach(function(cf) {
+    // The canonical label itself is also an alias
+    map[cf.label.toUpperCase()] = cf.id;
+    (cf.aliases || []).forEach(function(a) {
+      map[a.toUpperCase().trim()] = cf.id;
+    });
+  });
+  return map;
+}
+
+// Resolve a template placeholder key to its canonical field id
+// Returns null if no mapping found
+function resolveToCanonical(placeholderKey) {
+  var map = buildAliasMap();
+  return map[placeholderKey.toUpperCase().trim()] || null;
+}
+
+// ── FIELD INHERITANCE SYSTEM ─────────────────────────────────────────────
+// Defines which fields in one entity type inherit from a parent entity type.
+// Structure: { 'candidate': { 'cand_manager': { from:'role', fromField:'manager', condition:'ifSet' } } }
+// condition: 'ifSet' = only inherit if parent field has a value
+//            'always' = always inherit (overwrite even if empty string)
+
+var DEFAULT_FIELD_INHERITANCE = {
+  candidate: {
+    cand_role:     { from:'role', fromField:'position',    condition:'ifSet', label:'Role Applied For ← Role Position' },
+    cand_location: { from:'role', fromField:'location',    condition:'ifSet', label:'Location ← Role Location' },
+    cand_manager:  { from:'role', fromField:'manager',     condition:'ifSet', label:'Manager ← Role Manager' },
+  },
+  person: {
+    pf_position:   { from:'candidate', fromField:'cand_role',      condition:'ifSet', label:'Position ← Candidate Role Applied For' },
+    pf_manager:    { from:'candidate', fromField:'cand_manager',   condition:'ifSet', label:'Manager ← Candidate Manager' },
+    pf_location:   { from:'candidate', fromField:'cand_location',  condition:'ifSet', label:'Location ← Candidate Location' },
+    pf_preferred:  { from:'candidate', fromField:'cand_preferred', condition:'ifSet', label:'Preferred Name ← Candidate Preferred Name' },
+    pf_pronouns:   { from:'candidate', fromField:'cand_pronouns',  condition:'ifSet', label:'Pronouns ← Candidate Pronouns' },
+    pf_email:      { from:'candidate', fromField:'cand_email',     condition:'ifSet', label:'Email ← Candidate Email' },
+    pf_mobile:     { from:'candidate', fromField:'cand_phone',     condition:'ifSet', label:'Phone ← Candidate Phone' },
+  }
+};
+
+function getFieldInheritance() {
+  if (!appSettings.fieldInheritance) {
+    appSettings.fieldInheritance = JSON.parse(JSON.stringify(DEFAULT_FIELD_INHERITANCE));
+    saveSettings();
+  }
+  return appSettings.fieldInheritance;
+}
+function saveFieldInheritance(map) {
+  appSettings.fieldInheritance = map;
+  saveSettings();
+}
+
+// Apply inheritance rules when creating/updating an entity from a parent
+// parentEntity: the role/candidate object, parentType: 'role'|'candidate'
+// childEntity: the candidate/person object being created, childType: 'candidate'|'person'
+function applyInheritanceRules(childEntity, childType, parentEntity, parentType) {
+  if (!childEntity || !parentEntity) return childEntity;
+  var rules = getFieldInheritance()[childType] || {};
+  Object.keys(rules).forEach(function(childField) {
+    var rule = rules[childField];
+    if (rule.from !== parentType) return;
+    var parentVal = parentEntity[rule.fromField]
+      || (parentEntity._dynValues && parentEntity._dynValues[rule.fromField])
+      || '';
+    if (rule.condition === 'ifSet' && !parentVal) return;
+    // Only set if child field is currently empty (pre-fill, not overwrite)
+    if (!childEntity[childField]) {
+      childEntity[childField] = parentVal;
+    }
+  });
+  return childEntity;
+}
+
+// ── ENTITY FIELD RESOLUTION ──────────────────────────────────────────────
+// Walk the full chain and return a flat map of ALL resolved field values
+// for a given entity. Used to pre-fill templates.
+// Returns: { 'FULL NAME': 'Jane Smith', 'MANAGER': 'Tom Brown', ... }
+
+function resolveEntityFields(entity, entityType) {
+  if (!entity) return {};
+  var result = {};
+  var aliasMap = buildAliasMap(); // alias → canonical id
+  var canonicals = getCanonicalFields();
+  // Reverse map: canonical id → list of all aliases (for storing under every alias)
+  var canonicalToAliases = {};
+  canonicals.forEach(function(cf) {
+    canonicalToAliases[cf.id] = [cf.label.toUpperCase()].concat((cf.aliases||[]).map(function(a){ return a.toUpperCase(); }));
+  });
+
+  function storeField(canonicalId, value) {
+    if (!value) return;
+    var aliases = canonicalToAliases[canonicalId] || [];
+    aliases.forEach(function(alias) { result[alias] = value; });
+    result[canonicalId] = value;
+  }
+
+  // ── Step 1: Walk the inheritance chain upward to get parent values first ──
+  // Then the entity's own values override — giving priority to the most specific
+
+  if (entityType === 'person') {
+    // Walk: Role → Candidate → Person
+    var candidateId = entity.sourceCandidate;
+    var candidate = null;
+    var role = null;
+    if (candidateId) {
+      var allCands = getCandidates ? Object.values(getCandidates()).flat() : [];
+      candidate = allCands.find(function(c){ return c.id === candidateId; });
+    }
+    if (candidate && candidate.cand_roleId) {
+      var pipeline = loadPipeline();
+      role = pipeline.find(function(r){ return r.id === candidate.cand_roleId; });
+    }
+    if (role) { storeRoleFields(role); }
+    if (candidate) { storeCandidateFields(candidate); }
+  } else if (entityType === 'candidate') {
+    // Walk: Role → Candidate
+    var allCands2 = getCandidates ? Object.values(getCandidates()).flat() : [];
+    var roleId2 = entity.cand_roleId;
+    if (roleId2) {
+      var pipeline2 = loadPipeline();
+      var role2 = pipeline2.find(function(r){ return r.id === roleId2; });
+      if (role2) storeRoleFields(role2);
+    }
+    storeCandidateFields(entity);
+  } else if (entityType === 'role') {
+    storeRoleFields(entity);
+  } else if (entityType === 'people') {
+    storePersonFields(entity);
+  }
+
+  // ── Org/adviser fields always injected from settings ──
+  var s = appSettings;
+  if (s.orgName)      storeField('cf_organisation', s.orgName);
+  if (s.adviserName)  storeField('cf_adviser',      s.adviserName);
+  if (s.adviserTitle) storeField('cf_adviser_title', s.adviserTitle);
+  if (s.adviserEmail) storeField('cf_adviser_email', s.adviserEmail);
+
+  // ── Pronoun expansion ──
+  var pronounVal = result['PRONOUNS'] || result['Pronouns'] || '';
+  if (pronounVal && PRONOUN_SETS[pronounVal]) {
+    var ps = PRONOUN_SETS[pronounVal];
+    result['PRONOUN/SUBJECT']    = ps.subject;
+    result['PRONOUN/OBJECT']     = ps.object;
+    result['PRONOUN/POSSESSIVE'] = ps.possessive;
+    result['PRONOUN/REFLEXIVE']  = ps.reflexive;
+    result['PRONOUN/TITLE']      = ps.title;
+  }
+
+  return result;
+
+  function storeRoleFields(r) {
+    storeField('cf_position',    r.position   || '');
+    storeField('cf_department',  r.dept        || '');
+    storeField('cf_location',    r.location    || '');
+    storeField('cf_manager',     r.manager     || '');
+    storeField('cf_emptype',     r.empType     || '');
+  }
+  function storeCandidateFields(c) {
+    storeField('cf_fullname',    c.cand_name     || '');
+    storeField('cf_preferred',   c.cand_preferred || '');
+    storeField('cf_pronouns',    c.cand_pronouns  || '');
+    storeField('cf_email',       c.cand_email     || '');
+    storeField('cf_position',    c.cand_role      || '');
+    storeField('cf_location',    c.cand_location  || '');
+    storeField('cf_manager',     c.cand_manager   || '');
+    // Any dynamic custom fields
+    if (c._dynValues) {
+      Object.keys(c._dynValues).forEach(function(k) {
+        var cid = resolveToCanonical(k);
+        if (cid && c._dynValues[k]) storeField(cid, c._dynValues[k]);
+        else if (c._dynValues[k]) result[k.toUpperCase()] = c._dynValues[k];
+      });
+    }
+  }
+  function storePersonFields(p) {
+    storeField('cf_fullname',    p.pf_fullname   || '');
+    storeField('cf_preferred',   p.pf_preferred  || '');
+    storeField('cf_pronouns',    p.pf_pronouns   || '');
+    storeField('cf_email',       p.pf_email      || '');
+    storeField('cf_position',    p.pf_position   || '');
+    storeField('cf_department',  p.pf_department || '');
+    storeField('cf_location',    p.pf_location   || '');
+    storeField('cf_manager',     p.pf_manager    || '');
+    storeField('cf_emptype',     p.pf_emptype    || '');
+    storeField('cf_startdate',   p.pf_startdate ? formatDateValue(p.pf_startdate) : '');
+    // Any dynamic custom fields
+    if (p._dynValues) {
+      Object.keys(p._dynValues).forEach(function(k) {
+        var cid = resolveToCanonical(k);
+        if (cid && p._dynValues[k]) storeField(cid, p._dynValues[k]);
+        else if (p._dynValues[k]) result[k.toUpperCase()] = p._dynValues[k];
+      });
+    }
+  }
+}
+
 var PRONOUN_SETS = {
   'She / Her':   { subject:'she',  object:'her',   possessive:'her',   reflexive:'herself',    title:'Ms'  },
   'He / Him':    { subject:'he',   object:'him',   possessive:'his',   reflexive:'himself',    title:'Mr'  },
@@ -8880,61 +9132,44 @@ function previewPdf(pdfId, name) {
 
 
 // ── CASE-AWARE TEMPLATE GENERATION ───────────────────────────────────────
-// Pre-fill template fieldValues from a People profile
-function loadPersonIntoTemplate(personId, tplId) {
-  if (!personId) return;
-  var people = getPeople();
-  var p = people.find(function(x){ return x.id === personId; });
-  if (!p) return;
-
-  // Map profile fields → fieldValues keys
-  var mapping = {
-    pf_fullname:   ['EMPLOYEE NAME', 'FULL NAME', 'RECIPIENT NAME', 'PREFERRED NAME'],
-    pf_preferred:  ['PREFERRED NAME'],
-    pf_position:   ['POSITION', 'POSITION TITLE', 'ROLE'],
-    pf_department: ['DEPARTMENT', 'TEAM', 'DEPARTMENT / TEAM'],
-    pf_emptype:    ['EMPLOYMENT TYPE'],
-    pf_startdate:  ['START DATE', 'COMMENCEMENT DATE'],
-    pf_manager:    ['MANAGER', 'MANAGER NAME', 'DIRECT MANAGER'],
-    pf_award:      ['AWARD', 'AWARD / AGREEMENT'],
-    pf_location:   ['LOCATION', 'OFFICE LOCATION', 'WORK LOCATION'],
-    pf_payroll:    ['PAYROLL ID', 'EMPLOYEE ID'],
-    pf_email:      ['WORK EMAIL', 'EMAIL'],
-    pf_mobile:     ['MOBILE', 'PHONE'],
-  };
-
-  Object.keys(mapping).forEach(function(pfKey) {
-    var val = p[pfKey];
-    if (!val) return;
-    // Format date values
-    if (pfKey === 'pf_startdate' && val) val = formatDateValue(val);
-    mapping[pfKey].forEach(function(k) {
-      fieldValues[k] = val;
-      fieldValues[k.toUpperCase()] = val;
+// Pre-fill template fieldValues from a People profile or Candidate
+// using the full canonical field resolution chain
+function loadEntityIntoTemplate(entityId, entityType, tplId) {
+  var entity = null;
+  if (entityType === 'people') {
+    entity = getPeople().find(function(x){ return x.id === entityId; });
+  } else if (entityType === 'candidate') {
+    var allCands = getCandidates();
+    // allCands is keyed by roleId — flatten
+    Object.values(allCands).forEach(function(arr) {
+      var found = arr.find(function(c){ return c.id === entityId; });
+      if (found) entity = found;
     });
-    // Also store under the profile field label directly
-    var profileLabel = pfKey.replace('pf_', '').replace(/_/g, ' ').toUpperCase();
-    fieldValues[profileLabel] = val;
+  }
+  if (!entity) return;
+
+  // Resolve the full field chain
+  var resolved = resolveEntityFields(entity, entityType);
+
+  // Merge into fieldValues — resolved values stored under EVERY alias
+  // so any placeholder in any template can find them
+  Object.assign(fieldValues, resolved);
+
+  // Also store under canonical ids for resolvePh fallback
+  getCanonicalFields().forEach(function(cf) {
+    var val = resolved[cf.label.toUpperCase()];
+    if (val) fieldValues[cf.id] = val;
   });
 
-  // Pronouns — expand full set
-  if (p.pf_pronouns) {
-    fieldValues['Pronouns'] = p.pf_pronouns;
-    fieldValues['PRONOUNS'] = p.pf_pronouns;
-    var ps = PRONOUN_SETS[p.pf_pronouns];
-    if (ps) {
-      fieldValues['PRONOUN/SUBJECT']    = ps.subject;
-      fieldValues['PRONOUN/OBJECT']     = ps.object;
-      fieldValues['PRONOUN/POSSESSIVE'] = ps.possessive;
-      fieldValues['PRONOUN/REFLEXIVE']  = ps.reflexive;
-      fieldValues['PRONOUN/TITLE']      = ps.title;
-    }
-  }
-
-  // Re-render fill panel and preview
+  var name = entity.pf_fullname || entity.cand_name || 'profile';
   var tpl = data.templates.find(function(i){ return i.id === tplId; });
   if (tpl) renderTemplate(tpl);
-  toast('Pre-filled from ' + (p.pf_fullname || 'profile'));
+  toast('Pre-filled from ' + name);
+}
+
+// Keep old name as alias
+function loadPersonIntoTemplate(personId, tplId) {
+  loadEntityIntoTemplate(personId, 'people', tplId);
 }
 
 function setActiveCase(caseId, tplId) {
@@ -10019,6 +10254,8 @@ function renderSettings() {
     { id:'customJourneys',  label:'Custom Journeys' },
     { id:'caseFields',      label:'Fields' },
     { id:'caseForms',       label:'Form Builder' },
+    { id:'fieldAliases',    label:'Field Aliases' },
+    { id:'fieldInheritance',label:'Field Inheritance' },
     { id:'quickBlocks',     label:'Quick Blocks' },
     { id:'dateFormat',      label:'Date Format' },
     { id:'empTypes',        label:'Employment Types' },
@@ -10096,6 +10333,71 @@ function renderSettingsSection() {
         <button class="btn btn-sm" onclick="cfAddField2()">+ Add field</button>
         <button class="btn btn-sm" onclick="appSettings.candidateFields=null;saveSettings();renderSettingsSection()" style="color:var(--text3);">Reset to defaults</button>
       </div>`;
+    return;
+  }
+  if (settingsSection === 'fieldAliases') {
+    var canonicals = getCanonicalFields();
+    el.innerHTML = `
+      <div class="settings-section-title">Field Aliases</div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6;">
+        Map template placeholder names to canonical fields. When a template uses <code>{{COMMENCEMENT DATE}}</code>,
+        the system looks it up here and resolves it to the same value as <code>{{START DATE}}</code> if you've mapped both to <em>Start Date</em>.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
+        ${canonicals.map((cf, i) => `
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:12px 14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input value="${cf.label}" style="font-size:13px;font-weight:600;border:none;background:transparent;color:var(--text);outline:none;padding:0;"
+                  onblur="(function(v){var f=getCanonicalFields();f[${i}].label=v.trim();saveCanonicalFields(f);renderSettingsSection();})(this.value)">
+              </div>
+              <button class="btn btn-sm" style="color:var(--red);" onclick="(function(){if(!confirm('Remove ${cf.label}?'))return;var f=getCanonicalFields();f.splice(${i},1);saveCanonicalFields(f);renderSettingsSection();})()">Remove</button>
+            </div>
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:6px;">Responds to these placeholders:</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;">
+              ${(cf.aliases||[]).map((a, ai) => `
+                <span style="display:inline-flex;align-items:center;gap:4px;background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:3px;padding:2px 6px;font-size:11.5px;font-family:monospace;color:var(--teal);">
+                  {{${a}}}
+                  <button onclick="(function(){var f=getCanonicalFields();f[${i}].aliases.splice(${ai},1);saveCanonicalFields(f);renderSettingsSection();})()" style="background:none;border:none;cursor:pointer;color:var(--teal);font-size:13px;line-height:1;padding:0 0 0 2px;">&times;</button>
+                </span>`).join('')}
+              <button class="btn btn-sm" onclick="(function(){var a=prompt('Add placeholder alias (without {{ }}):');if(!a)return;var f=getCanonicalFields();f[${i}].aliases=f[${i}].aliases||[];f[${i}].aliases.push(a.toUpperCase().trim());saveCanonicalFields(f);renderSettingsSection();})()">+ Add alias</button>
+            </div>
+          </div>`).join('')}
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="(function(){var label=prompt('New canonical field name (e.g. Notice Period):');if(!label)return;var f=getCanonicalFields();f.push({id:'cf_'+label.toLowerCase().replace(/[^a-z0-9]+/g,'_'),label:label.trim(),aliases:[]});saveCanonicalFields(f);renderSettingsSection();})()">+ New canonical field</button>
+      <button class="btn btn-sm" onclick="appSettings.canonicalFields=null;saveSettings();renderSettingsSection()" style="margin-left:8px;color:var(--text3);">Reset to defaults</button>`;
+    return;
+  }
+
+  if (settingsSection === 'fieldInheritance') {
+    var inheritance = getFieldInheritance();
+    var entityTypes = [
+      { id:'candidate', label:'Candidate', desc:'Fields inherited when a candidate is added to a role', parentLabel:'Role' },
+      { id:'person',    label:'Person',    desc:'Fields inherited when a candidate is promoted to People', parentLabel:'Candidate' },
+    ];
+    el.innerHTML = `
+      <div class="settings-section-title">Field Inheritance</div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.6;">
+        When a Candidate is created from a Role, or a Person is promoted from a Candidate, these field mappings
+        control which values are pre-filled (only if the source field has a value — always overrideable).
+      </p>
+      ${entityTypes.map(et => {
+        var rules = inheritance[et.id] || {};
+        var ruleList = Object.entries(rules);
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px;margin-bottom:16px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px;">${et.label} ← ${et.parentLabel}</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:14px;">${et.desc}</div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+            ${ruleList.length ? ruleList.map(([childField, rule]) => `
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border-radius:var(--r-sm);">
+                <div style="flex:1;font-size:12.5px;color:var(--text);">${rule.label || childField + ' ← ' + rule.fromField}</div>
+                <span style="font-size:10.5px;padding:1px 6px;background:var(--teal-lt);color:var(--teal);border-radius:3px;">if set</span>
+                <button class="btn btn-sm" style="color:var(--red);" onclick="(function(){var inh=getFieldInheritance();delete inh['${et.id}']['${childField}'];saveFieldInheritance(inh);renderSettingsSection();})()">×</button>
+              </div>`).join('') : `<div style="font-size:12px;color:var(--text3);font-style:italic;">No inheritance rules defined.</div>`}
+          </div>
+          <button class="btn btn-sm" onclick="fiAddRule('${et.id}','${et.parentLabel.toLowerCase()}')">+ Add rule</button>
+        </div>`;
+      }).join('')}`;
     return;
   }
   if (settingsSection === 'customJourneys') {
@@ -10712,6 +11014,24 @@ function cfAddField2() {
   renderSettingsSection();
 }
 
+function fiAddRule(entityType, parentTypeLabel) {
+  var childField = prompt('Child field ID (e.g. cand_manager or pf_position):');
+  if (!childField) return;
+  var fromField = prompt('Parent field ID to inherit from (e.g. manager or cand_manager):');
+  if (!fromField) return;
+  var label = prompt('Description (e.g. Manager ← Role Manager):', childField + ' ← ' + fromField);
+  var inh = getFieldInheritance();
+  if (!inh[entityType]) inh[entityType] = {};
+  inh[entityType][childField.trim()] = {
+    from: parentTypeLabel,
+    fromField: fromField.trim(),
+    condition: 'ifSet',
+    label: label || (childField + ' ← ' + fromField)
+  };
+  saveFieldInheritance(inh);
+  renderSettingsSection();
+}
+
 // ── CANDIDATES ────────────────────────────────────────────────────────────
 var DEFAULT_CANDIDATE_FIELDS = [
   {id:'cand_name',    label:'Full Name',          type:'text',    width:'half', required:true,  group:'Personal'},
@@ -10858,7 +11178,7 @@ function saveCandidate() {
   var fields = getCandidateFields();
   var missing = fields.filter(function(f){ return f.required && !(document.getElementById('cand_input_'+f.id)||{}).value; });
   if(missing.length) { alert('Required: ' + missing.map(function(f){return f.label;}).join(', ')); return; }
-  var candidate = { id: editingCandidateId || ('cand_' + Date.now()), updated: todayStr() };
+  var candidate = { id: editingCandidateId || ('cand_' + Date.now()), updated: todayStr(), cand_roleId: editingCandidateRoleId };
   fields.forEach(function(f) {
     var el = document.getElementById('cand_input_' + f.id);
     candidate[f.id] = el ? el.value.trim() : '';
@@ -10889,6 +11209,7 @@ function promoteCandidateToPeople(roleId, candidateId) {
 
   var person = {
     id: 'p' + Date.now(), updated: todayStr(),
+    sourceCandidate: candidateId,    // retain chain for field resolution
     pf_fullname:  c.cand_name    || '',
     pf_preferred: c.cand_preferred || '',
     pf_pronouns:  c.cand_pronouns || '',
@@ -10896,6 +11217,8 @@ function promoteCandidateToPeople(roleId, candidateId) {
     pf_mobile:    c.cand_phone   || '',
     pf_notes:     c.cand_notes   || '',
     pf_position:  c.cand_role    || '',
+    pf_location:  c.cand_location || '',
+    pf_manager:   c.cand_manager  || '',
   };
   var people = getPeople();
   people.push(person);
