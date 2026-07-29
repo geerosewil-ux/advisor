@@ -2500,10 +2500,19 @@ function showEmpty() {
 
 // ── PLACEHOLDERS ──────────────────────────────────────────────────────────
 function extractFields(body, blocks, subject) {
-  // Extract placeholder keys, stripping modifiers (|cap, |lower etc.) — return unique base keys
+  // Decode common HTML entities in placeholder keys
+  function decodeEntities(str) {
+    return (str||'')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ');
+  }
   function extractKeys(str) {
     return [...(str||'').matchAll(/\{\{([^}]+)\}\}/g)]
-      .map(m => m[1].split('|')[0].trim())  // strip modifier, trim whitespace
+      .map(m => decodeEntities(m[1].split('|')[0].trim()))
       .filter(Boolean);
   }
   const fromBody = extractKeys(body);
@@ -2515,8 +2524,9 @@ function extractFields(body, blocks, subject) {
       const tmp = document.createElement('div');
       tmp.innerHTML = b.content;
       tmp.querySelectorAll('.be-ph').forEach(el => {
-        const m = el.textContent.match(/\{\{([^}]+)\}\}/);
-        if (m) fromBlocks.push(m[1].split('|')[0].trim());
+        const raw = el.textContent || el.innerText || '';
+        const m = raw.match(/\{\{([^}]+)\}\}/);
+        if (m) fromBlocks.push(decodeEntities(m[1].split('|')[0].trim()));
       });
     });
   }
@@ -2848,7 +2858,7 @@ function renderTemplate(item) {
 
           <!-- Preview + Internal panel side by side -->
           <div style="display:flex;gap:0;min-height:0;">
-            <div id="outputPreview" style="flex:1;padding:20px;overflow-x:auto;background:#F8F9FA;min-width:0;"></div>
+            <div id="outputPreview" style="flex:1;padding:0;overflow-x:auto;background:#F4F5F7;min-width:0;"></div>
 
             <!-- Internal checklist / notes panel — hidden by default -->
             <div id="internalPanel" style="display:none;width:280px;flex-shrink:0;border-left:1px solid var(--border);background:white;padding:14px;overflow-y:auto;">
@@ -3226,7 +3236,9 @@ function outlookBody(item) {
       : (fieldValues['EMPLOYEE NAME'] || fieldValues['Employee Name'] || '{{EMPLOYEE NAME}}');
     const fromVal = appSettings.orgName || '';
     return `
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;max-width:760px;background:#FFFFFF;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F5F7">
+<tr><td align="center" style="padding:20px 10px;">
+<table width="660" cellpadding="0" cellspacing="0" border="0" style="font-family:${ff};background:#FFFFFF;">
 
   <!-- TOP ACCENT BAR -->
   <tr><td height="3" style="background:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
@@ -3234,15 +3246,15 @@ function outlookBody(item) {
   <!-- ORG + DATE ROW -->
   <tr><td style="padding:14px 28px 10px;border-bottom:1px solid #F0F0F0;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td><p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:10.5px;font-weight:700;color:#6B7280;letter-spacing:.06em;text-transform:uppercase;">${fromVal||'Employment Relations'}</p></td>
-      <td align="right"><p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:10.5px;color:#9CA3AF;">${nowDate}</p></td>
+      <td><p style="margin:0;font-family:${ff};font-size:10.5px;font-weight:700;color:#6B7280;letter-spacing:.06em;text-transform:uppercase;">${fromVal||'Employment Relations'}</p></td>
+      <td align="right"><p style="margin:0;font-family:${ff};font-size:10.5px;color:#9CA3AF;">${nowDate}</p></td>
     </tr></table>
   </td></tr>
 
   <!-- RE LINE -->
   <tr><td style="padding:8px 28px 10px;border-bottom:1px solid #F5F5F5;">
-    ${toVal ? `<p style="margin:0 0 2px;font-family:${T.fontFamily},Arial,sans-serif;font-size:11.5px;color:#6B7280;">To: <span style="color:#111827;font-weight:500;">${toVal}</span></p>` : ''}
-    <p style="margin:0;font-family:${T.fontFamily},Arial,sans-serif;font-size:${fs};color:#4A5568;">Re: <strong style="color:#0F1724;">${subj||item.name}</strong>
+    ${toVal ? `<p style="margin:0 0 2px;font-family:${ff};font-size:11.5px;color:#6B7280;">To: <span style="color:#111827;font-weight:500;">${toVal}</span></p>` : ''}
+    <p style="margin:0;font-family:${ff};font-size:${fs};color:#4A5568;">Re: <strong style="color:#0F1724;">${subj||item.name}</strong>
     <span style="margin-left:12px;font-size:10.5px;color:#9CA3AF;font-weight:400;">Private &amp; Confidential</span></p>
   </td></tr>
 
@@ -3254,7 +3266,8 @@ function outlookBody(item) {
   <!-- BOTTOM ACCENT BAR -->
   <tr><td height="3" style="background:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
 
-</table>`;
+</table>
+</td></tr></table>`;
 
   } else if (fmt === 'letter') {
     // Resolve addressee fields
@@ -4535,13 +4548,14 @@ function toggleInternalPanel(tplId) {
 }
 function getTypography() {
   var t = (appSettings && appSettings.typography) ? appSettings.typography : {};
-  // fontSize stored in pt (matches block editor); convert to px for CSS output
-  var fontPt = t.fontSize || '10';
-  var fontPx = String(Math.round(parseFloat(fontPt) * 1.333));
+  // Always enforce Aptos 10pt — this is the locked standard
+  var fontPt = '10';
+  var fontFamily = 'Aptos';
+  var fontPx = '13'; // 10pt × 1.333 = 13.33 → 13px
   return {
-    fontFamily:   t.fontFamily   || 'Aptos',
-    fontSize:     fontPx,          // px for CSS use
-    fontPt:       fontPt,          // pt for display/comparison
+    fontFamily:   fontFamily,
+    fontSize:     fontPx,
+    fontPt:       fontPt,
     lineHeight:   t.lineHeight   || '1.6',
     bodyColor:    t.bodyColor    || '#1A1A1A',
     headingColor: t.headingColor || '#1A6B6B',
@@ -6770,10 +6784,14 @@ function renderFillField(f, fieldValues, itemId) {
   const canonicalId = resolveToCanonical(fKey);
   if (canonicalId === 'cf_startdate' || canonicalId === 'cf_enddate') fieldType = 'date';
 
-  // Name-based date detection as fallback
-  const isDateByName = /\bdate\b/i.test(fKey) && !/time/i.test(fKey) && !/update/i.test(fKey);
-  const isDateTimeByName = /\bdate\b/i.test(fKey) && /\btime\b/i.test(fKey);
-  if (isDateTimeByName) fieldType = 'datetime';
+  // Name-based date detection — handles "Interview Date & Time", "Meeting Date / Time" etc.
+  const fKeyNorm = fKey.replace(/[&\/\\|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const hasDate = /\bdate\b/i.test(fKeyNorm);
+  const hasTime = /\btime\b/i.test(fKeyNorm);
+  const hasUpdate = /\bupdate\b/i.test(fKeyNorm);
+  const isDateTimeByName = hasDate && hasTime;
+  const isDateByName = hasDate && !hasTime && !hasUpdate;
+  if (isDateTimeByName && fieldType === 'text') fieldType = 'datetime';
   else if (isDateByName && fieldType === 'text') fieldType = 'date';
 
   const rawKey = '__raw_' + fKey;
