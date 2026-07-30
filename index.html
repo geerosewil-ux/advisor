@@ -4795,6 +4795,10 @@ function resolveEntityFields(entity, entityType) {
     }
     if (f.type === 'award') expandAwardAttributes(val, '', values);
     if (f.type === 'classification') expandAwardAttributes('', val, values);
+    // Manager fields also resolve under the generic {{MANAGER}} key
+    if (f.type === 'manager' || /\bmanager\b/i.test(f.label||'')) {
+      if (!values['MANAGER']) values['MANAGER'] = val;
+    }
   });
 
   // Inject org/adviser fields from settings (exact-match labels)
@@ -6734,15 +6738,35 @@ function deleteCustomField(i) {
 
 // Get all placeholders including custom fields (called dynamically so picks up latest)
 function getAllPlaceholders() {
-  var customs = getFieldLib().map(function(f) {
-    var p = { group: f.group||'Fields', name: f.label, code: '{{' + f.label.toUpperCase() + '}}', fieldType: f.type||'text' };
-    if (f.type === 'date') p.isDate = true;
-    if (f.type === 'datetime') p.isDateTime = true;
-    if (f.type === 'select') { p.options = f.options||[]; }
-    if (f.type === 'multiselect') { p.isCheck = true; p.options = f.options||[]; }
-    return p;
+  var seen = {};
+  var out = [];
+  var add = function(label, group, type, options) {
+    if (!label) return;
+    var key = label.toUpperCase().trim();
+    if (seen[key]) return;
+    seen[key] = true;
+    var p = { group: group||'Fields', name: label, code: '{{' + key + '}}', fieldType: type||'text' };
+    if (type === 'date') p.isDate = true;
+    if (type === 'datetime') p.isDateTime = true;
+    if (type === 'select') p.options = options||[];
+    if (type === 'multiselect') { p.isCheck = true; p.options = options||[]; }
+    out.push(p);
+  };
+  // 1. Unified field library
+  getFieldLib().forEach(function(f){ add(f.label, f.group||'Fields', f.type, f.options); });
+  // 2. ALL form field sources — so every form field is a placeholder option
+  (typeof getProfileFields==='function'?getProfileFields():[]).forEach(function(f){ add(f.label, 'People', f.type, f.options); });
+  (typeof getCandidateFields==='function'?getCandidateFields():[]).forEach(function(f){ add(f.label, 'Candidate', f.type, f.options); });
+  (typeof getRoleFields==='function'?getRoleFields():[]).forEach(function(f){ add(f.label, 'Role', f.type, f.options); });
+
+  var base = BE_PLACEHOLDERS.concat(BE_CHECK_FIELDS).filter(function(p){
+    var key = (p.code||'').replace(/[{}]/g,'').toUpperCase().trim();
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
   });
-  // Location reference-entity placeholders — populated when a location is selected in a form
+
+  // Reference-entity sub-placeholders
   var locationPhs = [
     { group:'Location', name:'Location Name',    code:'{{LOCATION}}',          fieldType:'text' },
     { group:'Location', name:'Location Address',  code:'{{LOCATION ADDRESS}}',  fieldType:'text' },
@@ -6754,13 +6778,12 @@ function getAllPlaceholders() {
     { group:'Location', name:'Location Phone',    code:'{{LOCATION PHONE}}',    fieldType:'text' },
     { group:'Location', name:'Location Region',   code:'{{LOCATION REGION}}',   fieldType:'text' },
   ];
-  // Award reference-entity placeholders
   var awardPhs = [
     { group:'Award', name:'Award',          code:'{{AWARD}}',          fieldType:'text' },
     { group:'Award', name:'Classification', code:'{{CLASSIFICATION}}', fieldType:'text' },
     { group:'Award', name:'Level',          code:'{{LEVEL}}',          fieldType:'text' },
   ];
-  return [...BE_PLACEHOLDERS, ...BE_CHECK_FIELDS, ...customs, ...locationPhs, ...awardPhs];
+  return [...out, ...base, ...locationPhs, ...awardPhs];
 }
 
 // Render a field in fill mode based on its type
@@ -7088,8 +7111,15 @@ function editCfField(idx, mode, journeyId) {
       <button onclick="document.getElementById('_cfEditPanel').remove()" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:18px;padding:0;">&times;</button>
     </div>
     <div class="form-row" style="margin-bottom:10px;">
-      <div class="form-field"><label>Label</label><input id="_cfe_label" value="${f.label.replace(/"/g,'&quot;')}" style="width:100%;"></div>
+      <div class="form-field"><label>Label</label><input id="_cfe_label" value="${f.label.replace(/"/g,'&quot;')}" style="width:100%;" oninput="var rc=document.getElementById('_cfe_refcode');if(rc)rc.textContent='{{'+this.value.toUpperCase().trim()+'}}';"></div>
       <div class="form-field"><label>Section</label><input id="_cfe_section" value="${f.section.replace(/"/g,'&quot;')}" style="width:100%;"></div>
+    </div>
+    <div style="margin-bottom:12px;padding:10px 12px;background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:var(--r-sm);">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);margin-bottom:3px;">Reference code (read-only)</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <code id="_cfe_refcode" style="font-family:monospace;font-size:13px;color:var(--teal);font-weight:600;">{{${f.label.toUpperCase().trim()}}}</code>
+        <span style="font-size:10.5px;color:var(--text3);">— use this exact code in templates. It maps to this field everywhere.</span>
+      </div>
     </div>
     <div class="form-row" style="margin-bottom:10px;">
       <div class="form-field"><label>Field type</label>
@@ -11531,7 +11561,7 @@ var DEFAULT_CANDIDATE_FIELDS = [
   {id:'cand_salary',  label:'Salary Expectation', type:'text',    width:'half', required:false, group:'Application'},
   {id:'cand_role',    label:'Role Applied For',   type:'text',    width:'half', required:false, group:'Application'},
   {id:'cand_location',label:'Location',           type:'location',width:'half', required:false, group:'Application'},
-  {id:'cand_manager', label:'Reporting Manager',  type:'select',  width:'half', required:false, group:'Application'},
+  {id:'cand_manager', label:'Reporting Manager',  type:'manager', width:'half', required:false, group:'Application'},
   {id:'cand_stage',   label:'Stage',              type:'select',  width:'half', required:false, group:'Application',
     options:['Applied','Shortlisted','Interviewing','Reference Check','Offered','Accepted','Rejected','Withdrawn']},
   {id:'cand_notes',   label:'Notes',              type:'textarea',width:'full', required:false, group:'Application'},
@@ -12828,7 +12858,7 @@ function beRenderPhItems(items) {
     if(p.group!==lastG){const gl=document.createElement('div');gl.className='be-ph-grp';gl.textContent=p.group;list.appendChild(gl);lastG=p.group;}
     const item=document.createElement('div'); item.className='be-ph-item';
     const typeIcon = p.isDate||p.fieldType==='date'?'📅':p.isDateTime||p.fieldType==='datetime'?'📅':p.isCheck||p.fieldType==='multiselect'?'☑':p.fieldType==='yesno'?'✓':p.fieldType==='select'?'▾':p.fieldType==='number'?'#':p.fieldType==='textarea'?'¶':'{ }';
-    item.innerHTML=`<span class="be-ph-code">${typeIcon}</span><span>${beEsc(p.name)}</span>`;
+    item.innerHTML=`<span class="be-ph-code">${typeIcon}</span><span style="flex:1;">${beEsc(p.name)}</span><span style="font-family:monospace;font-size:10px;color:var(--text3);opacity:.7;">${beEsc(p.code)}</span>`;
     item.addEventListener('mousedown',e=>{e.preventDefault();beInsertPh(p);});
     list.appendChild(item);
   });
