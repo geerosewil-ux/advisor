@@ -8491,6 +8491,9 @@ function getFieldLib() {
 }
 function saveFieldLib(lib) { appSettings.fieldLib = lib; saveSettings(); }
 
+// Alias — everything that used the case field library now reads the unified one
+function getCaseFieldLib() { return getFieldLib(); }
+
 // Build a map from any known field ID (including aliases) → unified library field
 function getFieldIdAliasMap() {
   var map = {};
