@@ -4124,8 +4124,42 @@ function saveTpl() {
   };
   if (editingId) { const idx=data.templates.findIndex(i=>i.id===editingId); data.templates[idx]=t; }
   else data.templates.push(t);
+  autoCreateFieldsFromTemplate(t); // create library fields for any new placeholders
   saveTpls(); closeTplModal(); renderSidebar(); selectItem(t.id);
   toast(editingId?'Template updated':'Template created');
+}
+
+// Auto-create library fields for any placeholder used in a template that isn't already defined.
+// Skips reference sub-placeholders (LOCATION PARKING etc.) and pronoun tags.
+function autoCreateFieldsFromTemplate(tpl) {
+  var placeholders = extractFields(tpl.body, tpl.blocks, tpl.subject);
+  var lib = getFieldLib();
+  var existingLabels = {};
+  lib.forEach(function(f){ existingLabels[(f.label||'').toUpperCase().trim()] = true; });
+  // Reserved reference sub-attribute prefixes and pronoun tags — never auto-create these
+  var reserved = /^(PRONOUN\/|LOCATION |AWARD$|CLASSIFICATION$|LEVEL$|LOCATION$|OFFICE LOCATION$|WORK LOCATION$|ORGANISATION|ER ADVISER|ADVISER |YOUR TITLE|ER EMAIL)/i;
+  var created = 0;
+  placeholders.forEach(function(ph) {
+    var key = ph.toUpperCase().trim();
+    if (!key || existingLabels[key]) return;
+    if (reserved.test(key)) return;
+    if (isPronounField(ph)) return;
+    // Create a new library field — title-case the label for display
+    var label = ph.trim().replace(/\w\S*/g, function(w){ return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); });
+    // Auto-detect type from name
+    var type = 'text';
+    var norm = label.replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
+    if (/\bdate\b/i.test(norm) && /\btime\b/i.test(norm)) type = 'datetime';
+    else if (/\bdate\b/i.test(norm) && !/\bupdate\b/i.test(norm)) type = 'date';
+    lib.push({
+      id: 'fl_' + key.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''),
+      label: label, group: 'From Templates', type: type, options: [], placeholder: '', width: 'half', aliasIds: []
+    });
+    existingLabels[key] = true;
+    created++;
+  });
+  if (created) saveFieldLib(lib);
+  return created;
 }
 
 // ── KB MODAL ──────────────────────────────────────────────────────────────
@@ -4735,9 +4769,16 @@ function resolveEntityFields(entity, entityType) {
   else if (entityType === 'candidate') fieldDefs = getCandidateFields();
   else if (entityType === 'role')      fieldDefs = getRoleFields();
 
-  // Map each stored field value to its label (uppercase) for exact-match
+  // Map each stored field value to its label (uppercase) for exact-match.
+  // Read via alias IDs so old field IDs (pf_manager, cand_manager) still resolve.
   fieldDefs.forEach(function(f) {
     var raw = entity[f.id];
+    // If not found under this field's ID, check alias IDs (merged old fields)
+    if ((raw === undefined || raw === null || raw === '') && f.aliasIds) {
+      for (var ai = 0; ai < f.aliasIds.length; ai++) {
+        if (entity[f.aliasIds[ai]]) { raw = entity[f.aliasIds[ai]]; break; }
+      }
+    }
     if (raw === undefined || raw === null || raw === '') return;
     var val = raw;
     // Format dates
@@ -4748,10 +4789,12 @@ function resolveEntityFields(entity, entityType) {
     }
     // Also store under the field ID for internal lookups
     values[f.id] = val;
-    // If this is a location field, expand its attributes
+    // Reference-field expansion
     if (f.type === 'location' || /\blocation\b/i.test(f.label||'')) {
       expandLocationAttributes(val, values);
     }
+    if (f.type === 'award') expandAwardAttributes(val, '', values);
+    if (f.type === 'classification') expandAwardAttributes('', val, values);
   });
 
   // Inject org/adviser fields from settings (exact-match labels)
@@ -8095,12 +8138,18 @@ function fbPreviewField(f, rowIdx, journeyId) {
     default:
       inputHtml = '<input placeholder="' + (f.placeholder||'') + '" disabled style="width:100%;box-sizing:border-box;background:#FAFBFC;cursor:pointer;">';
   }
-  return '<div style="position:relative;margin-bottom:10px;border-radius:6px;padding:4px;margin-left:-4px;margin-right:-4px;transition:background .12s;' + (dimmed?'opacity:.4;':'') + '"'
+  return '<div draggable="true" data-fb-row="' + rowIdx + '" style="position:relative;margin-bottom:10px;border-radius:6px;padding:4px;margin-left:-4px;margin-right:-4px;transition:background .12s;' + (dimmed?'opacity:.4;':'') + '"'
+    + ' ondragstart="event.stopPropagation();window._fbDragRow=' + rowIdx + ';window._fbDragJourney=\'' + journeyId + '\';this.style.opacity=\'.35\'"'
+    + ' ondragend="this.style.opacity=\'' + (dimmed?'.4':'1') + '\'"'
+    + ' ondragover="event.preventDefault();this.style.borderTop=\'2px solid var(--teal)\'"'
+    + ' ondragleave="this.style.borderTop=\'none\'"'
+    + ' ondrop="event.preventDefault();event.stopPropagation();this.style.borderTop=\'none\';fbDragMove(\'' + journeyId + '\',' + rowIdx + ')"'
     + ' onmouseover="this.style.background=\'var(--teal-lt)\';this.querySelector(\'.fb-fld-tools\').style.display=\'flex\'"'
     + ' onmouseout="this.style.background=\'transparent\';this.querySelector(\'.fb-fld-tools\').style.display=\'none\'"'
     + ' onclick="fbEdit(\'' + journeyId + '\',' + rowIdx + ')">'
-    + '<label style="display:block;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;cursor:pointer;">' + f.label + requiredMark + (dimmed?' <span style="font-size:9.5px;color:var(--text3);text-transform:none;">(hidden)</span>':'') + '</label>'
-    + inputHtml
+    + '<div style="position:absolute;left:-2px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:12px;cursor:grab;opacity:.4;" title="Drag to move">⠿</div>'
+    + '<label style="display:block;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;margin-left:10px;cursor:pointer;">' + f.label + requiredMark + (dimmed?' <span style="font-size:9.5px;color:var(--text3);text-transform:none;">(hidden)</span>':'') + '</label>'
+    + '<div style="margin-left:10px;">' + inputHtml + '</div>'
     + '<div class="fb-fld-tools" style="display:none;position:absolute;top:-10px;right:2px;gap:2px;background:white;border:1px solid var(--border);border-radius:5px;box-shadow:var(--shadow);padding:2px;z-index:5;" onclick="event.stopPropagation()">'
     + '<button style="background:none;border:none;cursor:pointer;padding:2px 5px;font-size:10px;color:var(--text2);" title="Move up" onclick="fbMove(\'' + journeyId + '\',' + rowIdx + ',-1)">▲</button>'
     + '<button style="background:none;border:none;cursor:pointer;padding:2px 5px;font-size:10px;color:var(--text2);" title="Move down" onclick="fbMove(\'' + journeyId + '\',' + rowIdx + ',1)">▼</button>'
@@ -8108,6 +8157,26 @@ function fbPreviewField(f, rowIdx, journeyId) {
     + '<button style="background:none;border:none;cursor:pointer;padding:2px 5px;font-size:11px;color:var(--teal);" title="Edit placement" onclick="fbEdit(\'' + journeyId + '\',' + rowIdx + ')">✎</button>'
     + '<button style="background:none;border:none;cursor:pointer;padding:2px 5px;font-size:11px;color:var(--red);" title="Remove from form" onclick="fbRemove(\'' + journeyId + '\',' + rowIdx + ')">×</button>'
     + '</div></div>';
+}
+
+// Drag-move a field to a new position (works across sections)
+function fbDragMove(journeyId, targetIdx) {
+  var srcIdx = window._fbDragRow;
+  if (srcIdx === undefined || srcIdx === null) return;
+  if (window._fbDragJourney !== journeyId) return; // only within same form
+  if (srcIdx === targetIdx) return;
+  var rows = getJourneyForm(journeyId);
+  var moved = rows.splice(srcIdx, 1)[0];
+  if (!moved) return;
+  // Adjust target index if we removed an earlier item
+  var insertAt = srcIdx < targetIdx ? targetIdx - 1 : targetIdx;
+  // When moving across sections, adopt the target's section
+  var targetRow = rows[insertAt];
+  if (targetRow && targetRow.section !== undefined) moved.section = targetRow.section;
+  rows.splice(insertAt, 0, moved);
+  window._fbDragRow = null;
+  saveJourneyForm(journeyId, rows);
+  renderSettingsSection();
 }
 
 // ── FORM BUILDER (per-journey) ───────────────────────────────────────────
@@ -8360,19 +8429,29 @@ function getFieldLib() {
       var label = f.label || f.name;
       if (!label) return;
       var key = label.toLowerCase().trim();
-      if (seen[key]) return; // deduplicate by label
+      if (seen[key]) {
+        // Merge-by-meaning: record this field's ID as an alias of the existing unified field
+        var existing = lib.find(function(x){ return x.label.toLowerCase().trim() === key; });
+        if (existing && f.id && f.id !== existing.id) {
+          existing.aliasIds = existing.aliasIds || [];
+          if (existing.aliasIds.indexOf(f.id) === -1) existing.aliasIds.push(f.id);
+        }
+        return;
+      }
       seen[key] = true;
-      lib.push({
+      var entry = {
         id: f.id || ('fl_' + label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')),
         label: label,
         group: f.group || 'General',
         type: f.type || 'text',
         options: f.options || [],
         placeholder: f.placeholder || '',
-        width: f.width || 'half'
-      });
+        width: f.width || 'half',
+        aliasIds: f.aliasIds || []
+      };
+      lib.push(entry);
     };
-    // Merge sources — order matters for deduplication: custom fields win over defaults
+    // Merge ALL sources — merge-by-meaning collapses same-label fields, recording alias IDs
     (appSettings.caseFieldLib || []).forEach(addDef);
     (appSettings.customFields || []).forEach(addDef);
     (appSettings.caseFormBase || DEFAULT_CASE_FORM_BASE).forEach(addDef);
@@ -8380,24 +8459,63 @@ function getFieldLib() {
     Object.keys(appSettings.caseFormByType||{}).forEach(function(j) {
       (appSettings.caseFormByType[j]||[]).forEach(addDef);
     });
-    // Do NOT seed from DEFAULT_PROFILE_FIELDS — those are profile-only fields
+    // Merge People, Candidate, Role field definitions into the master library
+    (typeof DEFAULT_PROFILE_FIELDS !== 'undefined' ? DEFAULT_PROFILE_FIELDS : []).forEach(addDef);
+    (appSettings.profileFields || []).forEach(addDef);
+    (typeof DEFAULT_CANDIDATE_FIELDS !== 'undefined' ? DEFAULT_CANDIDATE_FIELDS : []).forEach(addDef);
+    (appSettings.candidateFields || []).forEach(addDef);
+    (typeof DEFAULT_ROLE_FIELDS !== 'undefined' ? DEFAULT_ROLE_FIELDS : []).forEach(addDef);
+    (appSettings.roleFields || []).forEach(addDef);
     appSettings.fieldLib = lib;
     saveSettings();
   }
-  // Also deduplicate in place if lib has grown duplicates
+  // Deduplicate in place, preserving alias IDs
   var seen2 = {};
-  appSettings.fieldLib = appSettings.fieldLib.filter(function(f) {
+  var merged = [];
+  appSettings.fieldLib.forEach(function(f) {
     var key = (f.label||'').toLowerCase().trim();
-    if (!key || seen2[key]) return false;
+    if (!key) return;
+    if (seen2[key]) {
+      var ex = merged.find(function(x){ return x.label.toLowerCase().trim() === key; });
+      if (ex && f.id && f.id !== ex.id) {
+        ex.aliasIds = ex.aliasIds || [];
+        if (ex.aliasIds.indexOf(f.id) === -1) ex.aliasIds.push(f.id);
+      }
+      return;
+    }
     seen2[key] = true;
-    return true;
+    merged.push(f);
   });
+  appSettings.fieldLib = merged;
   return appSettings.fieldLib;
 }
 function saveFieldLib(lib) { appSettings.fieldLib = lib; saveSettings(); }
 
-// Alias — everything that used the case field library now reads the unified one
-function getCaseFieldLib() { return getFieldLib(); }
+// Build a map from any known field ID (including aliases) → unified library field
+function getFieldIdAliasMap() {
+  var map = {};
+  getFieldLib().forEach(function(f) {
+    map[f.id] = f;
+    (f.aliasIds || []).forEach(function(aid){ map[aid] = f; });
+  });
+  return map;
+}
+
+// Resolve any field ID (old or aliased) to its unified field definition
+function resolveFieldId(fieldId) {
+  return getFieldIdAliasMap()[fieldId] || null;
+}
+
+// Given an entity record, read a value by unified field — checking all alias IDs
+function readEntityFieldValue(entity, unifiedField) {
+  if (!entity || !unifiedField) return '';
+  if (entity[unifiedField.id]) return entity[unifiedField.id];
+  var aliasIds = unifiedField.aliasIds || [];
+  for (var i = 0; i < aliasIds.length; i++) {
+    if (entity[aliasIds[i]]) return entity[aliasIds[i]];
+  }
+  return '';
+}
 function saveCaseFieldLib(lib) { saveFieldLib(lib); }
 
 // ── OLD CASE FIELDS LIBRARY (superseded, kept for reference) ─────────────
