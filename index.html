@@ -4795,9 +4795,12 @@ function resolveEntityFields(entity, entityType) {
     }
     if (f.type === 'award') expandAwardAttributes(val, '', values);
     if (f.type === 'classification') expandAwardAttributes('', val, values);
-    // Manager fields also resolve under the generic {{MANAGER}} key
-    if (f.type === 'manager' || /\bmanager\b/i.test(f.label||'')) {
-      if (!values['MANAGER']) values['MANAGER'] = val;
+    // Manager / person-reference fields — expand configured attributes from the linked profile
+    if (f.type === 'manager' || f.type === 'person' || /\bmanager\b/i.test(f.label||'')) {
+      var prefix = f.refPrefix || (/(\bmanager\b)/i.test(f.label||'') ? 'MANAGER' : f.label.toUpperCase().trim());
+      var expandIds = f.refExpand || ['pf_position','pf_email','pf_mobile'];
+      expandPersonReference(val, prefix, expandIds, values);
+      if (!values['MANAGER'] && /\bmanager\b/i.test(f.label||'')) values['MANAGER'] = values[prefix] || val;
     }
   });
 
@@ -6783,7 +6786,14 @@ function getAllPlaceholders() {
     { group:'Award', name:'Classification', code:'{{CLASSIFICATION}}', fieldType:'text' },
     { group:'Award', name:'Level',          code:'{{LEVEL}}',          fieldType:'text' },
   ];
-  return [...out, ...base, ...locationPhs, ...awardPhs];
+  var managerPhs = [
+    { group:'Manager', name:'Manager Name',       code:'{{MANAGER}}',            fieldType:'text' },
+    { group:'Manager', name:'Manager Title',      code:'{{MANAGER TITLE}}',      fieldType:'text' },
+    { group:'Manager', name:'Manager Email',      code:'{{MANAGER EMAIL}}',      fieldType:'text' },
+    { group:'Manager', name:'Manager Phone',      code:'{{MANAGER PHONE}}',      fieldType:'text' },
+    { group:'Manager', name:'Manager Department', code:'{{MANAGER DEPARTMENT}}', fieldType:'text' },
+  ];
+  return [...out, ...base, ...locationPhs, ...awardPhs, ...managerPhs];
 }
 
 // Render a field in fill mode based on its type
@@ -7139,6 +7149,20 @@ function editCfField(idx, mode, journeyId) {
         <textarea id="_cfe_options" rows="5" style="width:100%;box-sizing:border-box;resize:vertical;">${(f.options||[]).join('\n')}</textarea>
       </div>
     </div>
+    <div id="_cfe_ref_wrap" style="display:${['manager','person'].includes(f.type)?'block':'none'};margin-bottom:12px;padding:12px;background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:var(--r-sm);">
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);margin-bottom:8px;">Person-reference expansion</div>
+      <div class="form-field" style="margin-bottom:10px;"><label style="font-size:11.5px;">Placeholder prefix</label>
+        <input id="_cfe_refprefix" value="${(f.refPrefix||'MANAGER').replace(/"/g,'&quot;')}" placeholder="MANAGER" style="width:100%;font-family:monospace;">
+        <div style="font-size:10.5px;color:var(--text3);margin-top:2px;">e.g. "MANAGER" gives <code>{{MANAGER}}</code>, <code>{{MANAGER TITLE}}</code></div>
+      </div>
+      <label style="font-size:11.5px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Pull through these attributes from their profile:</label>
+      <div style="display:flex;flex-direction:column;gap:3px;max-height:180px;overflow-y:auto;">
+        ${getProfileFields().map(function(pf){
+          var checked = (f.refExpand||['pf_position','pf_email','pf_mobile']).indexOf(pf.id) !== -1;
+          return '<label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" class="_cfe_refexpand" value="'+pf.id+'"'+(checked?' checked':'')+' style="accent-color:var(--teal);"> '+pf.label+' <code style="font-size:9.5px;color:var(--text3);opacity:.6;margin-left:auto;">{{'+(f.refPrefix||'MANAGER')+' '+pf.label.toUpperCase()+'}}</code></label>';
+        }).join('')}
+      </div>
+    </div>
     <div style="margin-bottom:16px;">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
         <input type="checkbox" id="_cfe_required" ${f.required?'checked':''} style="accent-color:var(--teal);">
@@ -7156,21 +7180,30 @@ function editCfField(idx, mode, journeyId) {
 function toggleCfeOptions(type) {
   var wrap = document.getElementById('_cfe_options_wrap');
   if (wrap) wrap.style.display = (type === 'select' || type === 'multiselect') ? 'block' : 'none';
+  var refWrap = document.getElementById('_cfe_ref_wrap');
+  if (refWrap) refWrap.style.display = (type === 'manager' || type === 'person') ? 'block' : 'none';
 }
 
 function saveCfEdit(idx, mode, journeyId) {
   var fields = getCfFields(mode, journeyId);
   if (!fields[idx]) return;
   var optRaw = document.getElementById('_cfe_options')?.value || '';
-  fields[idx] = Object.assign({}, fields[idx], {
+  var newType = document.getElementById('_cfe_type')?.value || 'text';
+  var update = {
     label:       document.getElementById('_cfe_label')?.value.trim() || fields[idx].label,
     section:     document.getElementById('_cfe_section')?.value.trim() || fields[idx].section,
-    type:        document.getElementById('_cfe_type')?.value || 'text',
+    type:        newType,
     width:       document.getElementById('_cfe_width')?.value || 'half',
     placeholder: document.getElementById('_cfe_placeholder')?.value || '',
     options:     optRaw.split('\n').map(function(s){return s.trim();}).filter(Boolean),
     required:    document.getElementById('_cfe_required')?.checked || false,
-  });
+  };
+  // Person-reference config
+  if (newType === 'manager' || newType === 'person') {
+    update.refPrefix = (document.getElementById('_cfe_refprefix')?.value.trim() || 'MANAGER').toUpperCase();
+    update.refExpand = Array.from(document.querySelectorAll('._cfe_refexpand:checked')).map(function(cb){ return cb.value; });
+  }
+  fields[idx] = Object.assign({}, fields[idx], update);
   saveCfFields(mode, journeyId, fields);
   document.getElementById('_cfEditPanel')?.remove();
   renderSettingsSection();
@@ -7385,8 +7418,9 @@ function renderCfFieldInput(f) {
     case 'manager':
       var mgPeople = getPeople();
       var mgrOpts = '<option value="">— Select manager —</option>' + mgPeople.map(function(p){
-        return '<option value="' + (p.pf_fullname||'').replace(/"/g,'&quot;') + '" data-dept="' + (p.pf_department||'').replace(/"/g,'&quot;') + '">'
-          + (p.pf_fullname||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
+        var pnm = getEntityDisplayName(p, getProfileFields());
+        return '<option value="' + p.id + '" data-dept="' + (p.pf_department||'').replace(/"/g,'&quot;') + '">'
+          + pnm + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
       }).join('');
       return label + '<select id="cf_input_' + f.id + '" data-manager-field="' + f.id + '">' + mgrOpts + '</select>';
     default: {
@@ -7470,6 +7504,12 @@ function getCaseFormValues(journeyId) {
     // Classification fields: expand classification attributes
     if (val && f.type === 'classification') {
       expandAwardAttributes('', val, values);
+    }
+    // Manager / person-reference fields: expand from linked profile
+    if (val && (f.type === 'manager' || f.type === 'person' || /\bmanager\b/i.test(f.label||''))) {
+      var mPrefix = f.refPrefix || (/\bmanager\b/i.test(f.label||'') ? 'MANAGER' : (f.label||'').toUpperCase().trim());
+      var mExpand = f.refExpand || ['pf_position','pf_email','pf_mobile'];
+      expandPersonReference(val, mPrefix, mExpand, values);
     }
   });
   return values;
@@ -8745,6 +8785,47 @@ function getLegFlagReason(item) {
 // ── PEOPLE / EMPLOYEE PROFILES ────────────────────────────────────────────
 function getPeople() {
   try { return JSON.parse(localStorage.getItem('er_people') || '[]'); } catch(e) { return []; }
+}
+
+// Find a person by profile ID, with fallback to matching by full/display name (legacy data)
+function getPersonById(idOrName) {
+  if (!idOrName) return null;
+  var people = getPeople();
+  var byId = people.find(function(p){ return p.id === idOrName; });
+  if (byId) return byId;
+  // Fallback: match by display name
+  return people.find(function(p){
+    return getEntityDisplayName(p, getProfileFields()) === idOrName || p.pf_fullname === idOrName;
+  }) || null;
+}
+
+// Expand a person-reference field into prefixed placeholders.
+// prefix='MANAGER', field stores person ID/name → {{MANAGER}}=name, {{MANAGER TITLE}}=their position, etc.
+// expandFieldIds: array of People field IDs to pull through (configured per field in Form Builder)
+function expandPersonReference(personIdOrName, prefix, expandFieldIds, values) {
+  if (!personIdOrName || !prefix) return values;
+  var person = getPersonById(personIdOrName);
+  var pfDefs = getProfileFields();
+  var displayName = person ? getEntityDisplayName(person, pfDefs) : personIdOrName;
+  var PRE = prefix.toUpperCase().trim();
+  values[PRE] = displayName; // {{MANAGER}} = name
+  if (!person) return values;
+  // Expand each configured attribute → {{PREFIX ATTRLABEL}}
+  (expandFieldIds || []).forEach(function(fid) {
+    var def = pfDefs.find(function(f){ return f.id === fid; });
+    if (!def) return;
+    var v = person[fid];
+    if (!v) return;
+    if (def.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(v))) v = formatDateValue(v);
+    // Key: PREFIX + attribute label, e.g. "MANAGER" + "POSITION TITLE" → "MANAGER POSITION TITLE"
+    values[PRE + ' ' + def.label.toUpperCase().trim()] = v;
+    // Also common short aliases
+    if (/position|title/i.test(def.label)) values[PRE + ' TITLE'] = v;
+    if (/email/i.test(def.label)) values[PRE + ' EMAIL'] = v;
+    if (/mobile|phone/i.test(def.label)) values[PRE + ' PHONE'] = v;
+    if (/department|team/i.test(def.label)) values[PRE + ' DEPARTMENT'] = v;
+  });
+  return values;
 }
 
 var DEFAULT_PROFILE_FIELDS = [
@@ -10643,6 +10724,16 @@ function expandLocationAttributes(locationName, values) {
 // Selecting an award filters the classification dropdown to that award's levels.
 function getAwards() {
   if (!appSettings.awards) appSettings.awards = [];
+  // Migrate legacy string-array format → structured {name, classifications} objects
+  var needsMigration = appSettings.awards.some(function(a){ return typeof a === 'string'; });
+  if (needsMigration) {
+    var legacyClassifications = (appSettings.classifications && Array.isArray(appSettings.classifications)) ? appSettings.classifications : [];
+    appSettings.awards = appSettings.awards.map(function(a){
+      if (typeof a === 'string') return { name: a, classifications: legacyClassifications.slice() };
+      return a;
+    });
+    saveSettings(appSettings);
+  }
   return appSettings.awards;
 }
 function saveAwards(awards) {
@@ -11923,6 +12014,26 @@ function advancePipeline(id) {
 }
 
 var viewingPipelineId = null;
+// Assemble a display name from whatever name fields exist on an entity.
+function getEntityDisplayName(entity, fieldDefs) {
+  if (!entity) return '';
+  if (entity.cand_name) return entity.cand_name;
+  if (entity.pf_fullname) return entity.pf_fullname;
+  var first = '', last = '', full = '', preferred = '';
+  (fieldDefs || []).forEach(function(f) {
+    var v = entity[f.id];
+    if (!v) return;
+    var lbl = (f.label||'').toLowerCase();
+    if (/full name/.test(lbl)) full = v;
+    else if (/last name|surname|family name/.test(lbl)) last = v;
+    else if (/preferred/.test(lbl)) preferred = v;
+    else if (/first|given/.test(lbl)) first = v;
+  });
+  if (full) return full;
+  var name = [(preferred||first), last].filter(Boolean).join(' ').trim();
+  return name || preferred || first || last || '';
+}
+
 function openPipelineDetail(id) {
   viewingPipelineId = id;
   const items = loadPipeline();
@@ -11960,13 +12071,14 @@ function openPipelineDetail(id) {
         <button class="btn btn-sm btn-primary" onclick="openCandidateModal('${id}')">+ Add candidate</button>
       </div>
       ${candidates.length ? candidates.map(function(c) {
+        var cName = getEntityDisplayName(c, getCandidateFields());
         return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;cursor:pointer;"
           onclick="openCandidateModal('${id}','${c.id}')">
           <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">
-            ${(c.cand_name||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2)}
+            ${(cName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2)}
           </div>
           <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:600;color:var(--text);">${c.cand_name||'—'}</div>
+            <div style="font-size:13px;font-weight:600;color:var(--text);">${cName||'—'}</div>
             <div style="font-size:11.5px;color:var(--text3);">${[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:'', c.cand_salary?c.cand_salary:''].filter(Boolean).join(' · ')}</div>
           </div>
           ${c.cand_stage ? `<span style="font-size:10.5px;padding:2px 8px;background:var(--teal-lt);color:var(--teal);border-radius:10px;border:1px solid var(--teal-mid);">${c.cand_stage}</span>` : ''}
