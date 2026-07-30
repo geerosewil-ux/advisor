@@ -10430,103 +10430,146 @@ function handleResPdf(e) { handleResFile(e.target || e); }
 // saveResource defined above with openResourceModal
 
 // ── POSITION REQUEST ──────────────────────────────────────────────────────
-function openPositionRequest(journeyId) {
+function openPositionRequest(journeyId, editId) {
   lcJourneyId = journeyId || 'onboarding';
-  // Reset form
-  ['prPosition','prClassification','prDept','prLocation','prAward','prManager',
-   'prBudget','prApprovedBy','prNotes'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.value = '';
-  });
-  ['prEmpType','prHours','prProbation','prApproval'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.value = '';
-  });
-  document.getElementById('prStart').value = '';
-  document.getElementById('prEnd').value = '';
-  document.querySelectorAll('.pr-asset,.pr-system').forEach(cb => cb.checked = false);
-  document.getElementById('positionRequestModal').classList.add('open');
+  var fields = getRoleFields();
+  var existing = null;
+  if (editId) {
+    var pipeline = loadPipeline();
+    existing = pipeline.find(function(x){ return x.id === editId; });
+  }
+
+  var modal = document.getElementById('positionRequestModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'positionRequestModal';
+    modal.className = 'overlay';
+    document.body.appendChild(modal);
+  }
+  modal.dataset.editId = editId || '';
+
+  // Group fields by section and render dynamically (same pipeline as candidate/people forms)
+  var sections = []; fields.forEach(function(f){ if(sections.indexOf(f.group)<0) sections.push(f.group); });
+  var body = sections.map(function(sec) {
+    var sf = fields.filter(function(f){ return f.group === sec; });
+    var rows = ''; var i = 0;
+    while (i < sf.length) {
+      var f = sf[i];
+      if (f.width === 'full') {
+        rows += '<div class="form-field" style="margin-bottom:8px;">' + renderRoleFieldInput(f, existing) + '</div>'; i++;
+      } else {
+        var nxt = sf[i+1];
+        if (nxt && nxt.width !== 'full') {
+          rows += '<div class="form-row"><div class="form-field">' + renderRoleFieldInput(f, existing) + '</div><div class="form-field">' + renderRoleFieldInput(nxt, existing) + '</div></div>';
+          i += 2;
+        } else { rows += '<div class="form-field" style="margin-bottom:8px;">' + renderRoleFieldInput(f, existing) + '</div>'; i++; }
+      }
+    }
+    return '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin:12px 0 8px;">' + sec + '</div>' + rows;
+  }).join('');
+
+  modal.innerHTML = '<div class="modal" style="width:600px;max-height:90vh;overflow-y:auto;">'
+    + '<div class="modal-title" style="margin-bottom:4px;">' + (editId ? 'Edit Position Request' : 'New Position Request') + '</div>'
+    + '<p style="font-size:12px;color:var(--text3);margin:0 0 14px;">Fields are configured in <a href="#" onclick="closePositionRequest();settingsSection=\'caseForms\';window._fbJourney=\'__role__\';currentTab=\'settings\';renderApp();return false;" style="color:var(--teal);">Form Builder → Role</a>.</p>'
+    + body
+    + '<div class="modal-footer">'
+    + '<button class="btn" onclick="closePositionRequest()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="savePositionRequest()">' + (editId ? 'Save changes' : 'Create position request') + '</button>'
+    + '</div></div>';
+  modal.classList.add('open');
+}
+
+function closePositionRequest() {
+  var m = document.getElementById('positionRequestModal');
+  if (m) m.classList.remove('open');
+}
+
+// Render a role field input (reuses the same reference-type logic as other forms)
+function renderRoleFieldInput(f, existing) {
+  var val = (existing && existing[f.id] != null) ? existing[f.id] : '';
+  var label = '<label>' + f.label + (f.required ? ' <span style="color:var(--red);">*</span>' : '') + '</label>';
+  var id = 'rf_input_' + f.id;
+  if (f.type === 'textarea') return label + '<textarea id="' + id + '" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">' + String(val).replace(/</g,'&lt;') + '</textarea>';
+  if (f.type === 'date') return label + '<input type="date" id="' + id + '" value="' + val + '">';
+  if (f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (String(val).split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (String(val).split(' ')[1]||'') + '" style="width:110px;"></div>';
+  if (f.type === 'number') return label + '<input type="number" id="' + id + '" value="' + String(val).replace(/"/g,'&quot;') + '">';
+  if (f.type === 'select') {
+    var opts = '<option value="">— Select —</option>' + (f.options||[]).map(function(o){ return '<option' + (val===o?' selected':'') + '>' + o + '</option>'; }).join('');
+    return label + '<select id="' + id + '">' + opts + '</select>';
+  }
+  if (f.type === 'location') {
+    var locs = (appSettings.locations||[]).map(function(l){ return typeof l==='string'?l:l.name; });
+    return label + '<select id="' + id + '"><option value="">— Select location —</option>' + locs.map(function(l){ return '<option' + (val===l?' selected':'') + '>' + l + '</option>'; }).join('') + '</select>';
+  }
+  if (f.type === 'manager' || f.type === 'person') {
+    var people = getPeople();
+    return label + '<select id="' + id + '" data-manager-field="' + f.id + '"><option value="">— Select —</option>' + people.map(function(p){
+      var pnm = getEntityDisplayName(p, getProfileFields());
+      return '<option value="' + p.id + '"' + (val===p.id||val===pnm?' selected':'') + '>' + pnm + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
+    }).join('') + '</select>';
+  }
+  if (f.type === 'award') {
+    return label + '<select id="' + id + '" data-award-field="' + f.id + '" onchange="onAwardFieldChange(\'' + f.id + '\',this.value)"><option value="">— Select award —</option>' + getAwards().map(function(a){ return '<option' + (val===a.name?' selected':'') + '>' + (a.name||'') + '</option>'; }).join('') + '</select>';
+  }
+  if (f.type === 'classification') {
+    var clOpts = '<option value="">— Select award first —</option>';
+    if (val) clOpts = '<option value="' + String(val).replace(/"/g,'&quot;') + '" selected>' + val + '</option>' + clOpts;
+    return label + '<select id="' + id + '" data-classification-field="' + f.id + '">' + clOpts + '</select>';
+  }
+  // Auto-detect date from label
+  var norm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
+  if (/\bdate\b/i.test(norm) && !/\bupdate\b/i.test(norm)) return label + '<input type="date" id="' + id + '" value="' + val + '">';
+  return label + '<input id="' + id + '" value="' + String(val).replace(/"/g,'&quot;') + '" placeholder="' + (f.placeholder||'') + '">';
 }
 
 function savePositionRequest() {
-  const position = document.getElementById('prPosition').value.trim();
-  if (!position) { alert('Position title required.'); return; }
+  var fields = getRoleFields();
+  var modal = document.getElementById('positionRequestModal');
+  var editId = modal.dataset.editId;
 
-  const assets = [...document.querySelectorAll('.pr-asset:checked')].map(cb => cb.value);
-  const systems = [...document.querySelectorAll('.pr-system:checked')].map(cb => cb.value);
+  // Read all field values dynamically
+  var req = { id: editId || ('pr_' + Date.now()), created: todayStr() };
+  var positionVal = '';
+  fields.forEach(function(f) {
+    var el = document.getElementById('rf_input_' + f.id);
+    var timeEl = document.getElementById('rf_input_' + f.id + '_time');
+    var v = '';
+    if (timeEl) {
+      var d = el ? el.value : '';
+      var t = timeEl.value || '';
+      v = d ? (t ? formatDateTimeValue(d, t) : formatDateValue(d)) : '';
+    } else if (el && el.type === 'date') {
+      v = el.value ? formatDateValue(el.value) : '';
+    } else {
+      v = el ? el.value.trim() : '';
+    }
+    req[f.id] = v;
+    // Map key role fields to canonical pipeline properties for compatibility
+    if (/position|role title|job title/i.test(f.label)) { req.position = v; positionVal = v; }
+    if (/classification/i.test(f.label)) req.classification = v;
+    if (/department|dept/i.test(f.label)) req.dept = v;
+    if (/location/i.test(f.label)) req.location = v;
+    if (/manager/i.test(f.label)) req.manager = v;
+    if (/award/i.test(f.label)) req.award = v;
+    if (/employment type/i.test(f.label)) req.empType = v;
+    if (/start date/i.test(f.label)) req.startDate = v;
+  });
 
-  // Save the request data to localStorage for reference
-  const req = {
-    id: 'pr_' + Date.now(),
-    position,
-    classification: document.getElementById('prClassification').value.trim(),
-    dept: document.getElementById('prDept').value.trim(),
-    location: document.getElementById('prLocation').value.trim(),
-    empType: document.getElementById('prEmpType').value,
-    hours: document.getElementById('prHours').value,
-    award: document.getElementById('prAward').value.trim(),
-    startDate: document.getElementById('prStart').value,
-    endDate: document.getElementById('prEnd').value,
-    probation: document.getElementById('prProbation').value,
-    manager: document.getElementById('prManager').value.trim(),
-    budget: document.getElementById('prBudget').value.trim(),
-    approval: document.getElementById('prApproval').value,
-    approvedBy: document.getElementById('prApprovedBy').value.trim(),
-    notes: document.getElementById('prNotes').value.trim(),
-    assets, systems,
-    created: todayStr()
-  };
+  if (!positionVal && !req.position) { alert('Position title required.'); return; }
 
-  // Save to recruitment pipeline
-  const editId2 = document.getElementById('positionRequestModal').dataset.editId;
-  const pipeline = loadPipeline();
-  if (editId2) {
-    const idx = pipeline.findIndex(x => x.id === editId2);
-    if (idx >= 0) { pipeline[idx] = { ...pipeline[idx], ...req }; }
-    document.getElementById('positionRequestModal').dataset.editId = '';
-    savePipeline(pipeline);
-    document.getElementById('positionRequestModal').classList.remove('open');
-    if (currentTab === 'recruitment') renderRecruitment();
-    toast('Position request updated');
-    return;
+  var pipeline = loadPipeline();
+  if (editId) {
+    var idx = pipeline.findIndex(function(x){ return x.id === editId; });
+    if (idx >= 0) pipeline[idx] = Object.assign({}, pipeline[idx], req);
   } else {
     req.stage = 'request';
     req.stageHistory = [{ stage: 'request', date: todayStr() }];
     pipeline.push(req);
-    savePipeline(pipeline);
   }
-
-  // Pre-populate the case modal with position request data
-  document.getElementById('positionRequestModal').classList.remove('open');
-  document.getElementById('caseModalTitle').textContent = 'New Onboarding Case — ' + position;
-  document.getElementById('caseModal').dataset.editId = '';
-  document.getElementById('caseModal').dataset.posReqId = req.id;
-
-  // Fill case fields from position request
-  document.getElementById('casePosition').value = position;
-  document.getElementById('caseClassification').value = req.classification;
-  document.getElementById('caseDept').value = req.dept;
-  document.getElementById('caseLocation').value = req.location;
-  document.getElementById('caseEmpType').value = req.empType;
-  document.getElementById('caseHours').value = req.hours;
-  document.getElementById('caseAward').value = req.award;
-  document.getElementById('caseStart').value = req.startDate;
-  document.getElementById('caseEndDate').value = req.endDate;
-  document.getElementById('caseProbation').value = req.probation;
-  document.getElementById('caseManager').value = req.manager;
-  document.getElementById('caseEmployee').value = '';
-  document.getElementById('caseNotes').value = [
-    req.notes,
-    req.budget ? 'Budget code: ' + req.budget : '',
-    req.approval ? 'Approval: ' + req.approval + (req.approvedBy?' ('+req.approvedBy+')':'') : '',
-    assets.length ? 'Assets: ' + assets.join(', ') : '',
-    systems.length ? 'Systems: ' + systems.join(', ') : ''
-  ].filter(Boolean).join('\n');
-
-  // Store the asset/system selections so IT template can use them
-  fieldValues['CHECK: Laptop | Desktop | Monitor | Docking station | Mobile phone | Desk phone | iPad/Tablet | Building access pass | Parking pass | Company credit card | Locker key'] = assets;
-  fieldValues['CHECK: Microsoft 365 / Email | SharePoint / Teams | Network / VPN | HR System | Finance System | CRM | Project Management Tool | Payroll System | Building Access System'] = systems;
-
-  document.getElementById('caseModal').classList.add('open');
-  toast('Position request saved — complete employee details to create onboarding case');
+  savePipeline(pipeline);
+  closePositionRequest();
+  if (currentTab === 'recruitment') renderRecruitment();
+  toast(editId ? 'Position request updated' : 'Position request created');
 }
 
 
@@ -11720,15 +11763,34 @@ function openCandidateModal(roleId, candidateId) {
   var candidates = getCandidates(roleId);
   var c = candidateId ? candidates.find(function(x){ return x.id === candidateId; }) : null;
 
-  // Inherit role details for new candidates
+  // Inherit role details for new candidates — match role fields to candidate fields by meaning
   if (!c) {
     var items = loadPipeline();
     var role = items.find(function(x){ return x.id === roleId; });
-    c = role ? {
-      cand_role:    role.position || '',
-      cand_location: role.location || '',
-      cand_manager: role.manager  || '',
-    } : {};
+    c = {};
+    if (role) {
+      var candDefs = getCandidateFields();
+      var roleDefs = getRoleFields();
+      // For each candidate field, find a role field with matching label/meaning and copy its value
+      candDefs.forEach(function(cf) {
+        var cLabel = (cf.label||'').toLowerCase();
+        // Direct canonical property matches first
+        var mapped = '';
+        if (/position|role title|job title|role applied/i.test(cLabel)) mapped = role.position || role.rf_position;
+        else if (/location/i.test(cLabel)) mapped = role.location || role.rf_location;
+        else if (/manager/i.test(cLabel)) mapped = role.manager || role.rf_manager;
+        else if (/department|dept/i.test(cLabel)) mapped = role.dept || role.rf_dept;
+        else if (/award/i.test(cLabel)) mapped = role.award || role.rf_award;
+        else if (/classification/i.test(cLabel)) mapped = role.classification || role.rf_classification;
+        else if (/employment type/i.test(cLabel)) mapped = role.empType || role.rf_emptype;
+        else {
+          // Fall back: find a role field with the same label
+          var rf = roleDefs.find(function(r){ return (r.label||'').toLowerCase() === cLabel; });
+          if (rf && role[rf.id]) mapped = role[rf.id];
+        }
+        if (mapped) c[cf.id] = mapped;
+      });
+    }
   }
 
   var modal = document.getElementById('candidateModal');
@@ -12162,22 +12224,8 @@ function editPipelineItem() {
   const item = items.find(x => x.id === viewingPipelineId);
   if (!item) return;
   document.getElementById('pipelineDetailModal').classList.remove('open');
-  // Re-open position request modal pre-filled
-  openPositionRequest('onboarding');
-  setTimeout(() => {
-    ['prPosition','prClassification','prDept','prLocation','prAward','prManager','prBudget','prApprovedBy','prNotes'].forEach(id => {
-      const map = {prPosition:'position',prClassification:'classification',prDept:'dept',prLocation:'location',prAward:'award',prManager:'manager',prBudget:'budget',prApprovedBy:'approvedBy',prNotes:'notes'};
-      const el = document.getElementById(id); if(el) el.value = item[map[id]]||'';
-    });
-    const selMap = {prEmpType:'empType',prHours:'hours',prProbation:'probation',prApproval:'approval'};
-    Object.entries(selMap).forEach(([id,k]) => { const el=document.getElementById(id); if(el) el.value=item[k]||''; });
-    document.getElementById('prStart').value = item.startDate||'';
-    document.getElementById('prEnd').value = item.endDate||'';
-    (item.assets||[]).forEach(a => { document.querySelectorAll('.pr-asset').forEach(cb=>{ if(cb.value===a) cb.checked=true; }); });
-    (item.systems||[]).forEach(s => { document.querySelectorAll('.pr-system').forEach(cb=>{ if(cb.value===s) cb.checked=true; }); });
-    // Mark as edit
-    document.getElementById('positionRequestModal').dataset.editId = viewingPipelineId;
-  }, 100);
+  // Dynamic modal handles pre-fill via editId
+  openPositionRequest('onboarding', viewingPipelineId);
 }
 
 function deletePipelineItem() {
@@ -13666,114 +13714,7 @@ if (window._firebaseReady) {
 </div>
 
 <!-- POSITION REQUEST MODAL -->
-<div class="overlay" id="positionRequestModal">
-  <div class="modal" style="width:680px;">
-    <div class="modal-title">Position Request — Recruitment Intake Form</div>
-    <div style="font-size:12.5px;color:var(--text2);margin-top:-8px;margin-bottom:4px;">Completed by the requesting manager before recruitment commences. Data flows through to onboarding automatically.</div>
-
-    <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin-bottom:8px;">Position Details</div>
-    <div class="form-row">
-      <div class="form-field"><label>Position Title</label><input id="prPosition" placeholder="e.g. Senior Policy Analyst"></div>
-      <div class="form-field"><label>Classification / Grade</label>
-        <input id="prClassification" list="classificationList" placeholder="e.g. APS6, Level 4">
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-field"><label>Department / Team</label><input id="prDept" placeholder="e.g. People & Culture"></div>
-      <div class="form-field"><label>Location / Site</label><input id="prLocation" placeholder="e.g. Perth CBD"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-field"><label>Employment Type</label>
-        <select id="prEmpType">
-          <option value="">— Select —</option>
-          <option>Permanent Full-Time</option><option>Permanent Part-Time</option>
-          <option>Fixed Term Full-Time</option><option>Fixed Term Part-Time</option>
-          <option>Casual</option><option>Labour Hire</option>
-        </select>
-      </div>
-      <div class="form-field"><label>Ordinary Hours pw</label>
-        <select id="prHours">
-          <option value="">— Select —</option>
-          <option>38</option><option>37.5</option><option>36.75</option>
-          <option>32</option><option>30</option><option>24</option><option>20</option>
-        </select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-field"><label>Award / Agreement</label>
-        <input id="prAward" list="awardList" placeholder="e.g. Clerks Award 2020">
-      </div>
-      <div class="form-field"><label>Proposed Start Date</label><input id="prStart" type="date"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-field"><label>Fixed Term End Date <span style="font-weight:400;color:var(--text3);">(if applicable)</span></label><input id="prEnd" type="date"></div>
-      <div class="form-field"><label>Probation Period</label>
-        <select id="prProbation">
-          <option value="">— Select —</option>
-          <option>3 months</option><option>6 months</option><option>12 months</option><option>No probation</option>
-        </select>
-      </div>
-    </div>
-
-    <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin:12px 0 8px;">Assets & Systems</div>
-    <div class="form-field">
-      <label>Equipment Required</label>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Laptop" class="pr-asset" style="accent-color:var(--teal);">Laptop</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Desktop" class="pr-asset" style="accent-color:var(--teal);">Desktop</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Monitor" class="pr-asset" style="accent-color:var(--teal);">Monitor</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Docking station" class="pr-asset" style="accent-color:var(--teal);">Docking station</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Mobile phone" class="pr-asset" style="accent-color:var(--teal);">Mobile phone</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Desk phone" class="pr-asset" style="accent-color:var(--teal);">Desk phone</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="iPad/Tablet" class="pr-asset" style="accent-color:var(--teal);">iPad/Tablet</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Building access pass" class="pr-asset" style="accent-color:var(--teal);">Building access pass</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Parking pass" class="pr-asset" style="accent-color:var(--teal);">Parking pass</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Company credit card" class="pr-asset" style="accent-color:var(--teal);">Company credit card</label>
-      </div>
-    </div>
-    <div class="form-field" style="margin-top:8px;">
-      <label>Systems Access Required</label>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Microsoft 365 / Email" class="pr-system" style="accent-color:var(--teal);">Microsoft 365 / Email</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="SharePoint / Teams" class="pr-system" style="accent-color:var(--teal);">SharePoint / Teams</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Network / VPN" class="pr-system" style="accent-color:var(--teal);">Network / VPN</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="HR System" class="pr-system" style="accent-color:var(--teal);">HR System</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Finance System" class="pr-system" style="accent-color:var(--teal);">Finance System</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="CRM" class="pr-system" style="accent-color:var(--teal);">CRM</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Payroll System" class="pr-system" style="accent-color:var(--teal);">Payroll System</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Building Access System" class="pr-system" style="accent-color:var(--teal);">Building Access System</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;"><input type="checkbox" value="Project Management Tool" class="pr-system" style="accent-color:var(--teal);">Project Management Tool</label>
-      </div>
-    </div>
-
-    <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin:12px 0 8px;">Approval & Budget</div>
-    <div class="form-row">
-      <div class="form-field"><label>Reporting Manager</label><input id="prManager" placeholder="e.g. Tom Hughes"></div>
-      <div class="form-field"><label>Budget Code / Cost Centre</label><input id="prBudget" placeholder="e.g. CC-1042"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-field"><label>Approval Status</label>
-        <select id="prApproval">
-          <option value="">— Select —</option>
-          <option>Pending approval</option>
-          <option>Approved — proceed to recruit</option>
-          <option>Approved — direct engagement</option>
-          <option>On hold</option>
-          <option>Declined</option>
-        </select>
-      </div>
-      <div class="form-field"><label>Approved By</label><input id="prApprovedBy" placeholder="e.g. CEO / GM / Director"></div>
-    </div>
-    <div class="form-field"><label>Additional Notes</label>
-      <textarea id="prNotes" rows="2" placeholder="Any background, context, or specific requirements for this role…"></textarea>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn" onclick="document.getElementById('positionRequestModal').classList.remove('open')">Cancel</button>
-      <button class="btn btn-primary" onclick="savePositionRequest()">Save & Create Onboarding Case</button>
-    </div>
-  </div>
-</div>
+<div class="overlay" id="positionRequestModal"></div>
 
 <!-- RECRUITMENT PIPELINE DETAIL MODAL -->
 <div class="overlay" id="pipelineDetailModal">
