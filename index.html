@@ -8493,9 +8493,9 @@ function flEditPanel(idx) {
     + '<div class="form-field" style="flex:1;margin:0;"><label>Group</label><input id="flEdGroup" value="' + (f.group||'General').replace(/"/g,'&quot;') + '"></div></div>'
     + '<div class="form-row" style="gap:8px;margin-bottom:10px;">'
     + '<div class="form-field" style="flex:1;margin:0;"><label>Type</label>'
-    + '<select id="flEdType" onchange="document.getElementById(\'flEdOptsWrap\').style.display=(this.value===\'select\'||this.value===\'multiselect\')?\'block\':\'none\'">'
-    + ['text','textarea','date','datetime','number','yesno','select','multiselect','location'].map(function(t){
-        var labels={text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes / No',select:'Single Select',multiselect:'Multi-Select',location:'Office Location'};
+    + '<select id="flEdType" onchange="flEdTypeChange(this.value)">'
+    + ['text','textarea','date','datetime','number','yesno','select','multiselect','checklist','location','manager','award','classification'].map(function(t){
+        var labels={text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes / No',select:'Single Select',multiselect:'Multi-Select',checklist:'Checklist',location:'Office Location (reference)',manager:'Manager / Person (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'};
         return '<option value="'+t+'" '+(f.type===t?'selected':'')+'>'+labels[t]+'</option>';
       }).join('')
     + '</select></div>'
@@ -8504,11 +8504,29 @@ function flEditPanel(idx) {
     + '<div class="form-field" style="margin-bottom:10px;"><label>Placeholder</label><input id="flEdPlaceholder" value="' + (f.placeholder||'').replace(/"/g,'&quot;') + '"></div>'
     + '<div id="flEdOptsWrap" style="display:' + (showOpts?'block':'none') + ';margin-bottom:10px;">'
     + '<div class="form-field" style="margin:0;"><label>Options — one per line</label><textarea id="flEdOptions" rows="4" style="width:100%;box-sizing:border-box;resize:vertical;">' + (f.options||[]).join('\n') + '</textarea></div></div>'
+    + '<div id="flEdRefWrap" style="display:' + ((f.type==='manager'||f.type==='person')?'block':'none') + ';margin-bottom:12px;padding:12px;background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:var(--r-sm);">'
+    + '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);margin-bottom:8px;">Person-reference expansion</div>'
+    + '<div class="form-field" style="margin-bottom:10px;"><label style="font-size:11.5px;">Placeholder prefix</label>'
+    + '<input id="flEdRefPrefix" value="' + (f.refPrefix||'MANAGER').replace(/"/g,'&quot;') + '" style="width:100%;font-family:monospace;">'
+    + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px;">e.g. "MANAGER" gives <code>{{MANAGER}}</code>, <code>{{MANAGER TITLE}}</code></div></div>'
+    + '<label style="font-size:11.5px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Pull through from their profile:</label>'
+    + '<div style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;">'
+    + getProfileFields().map(function(pf){
+        var checked = (f.refExpand||['pf_position','pf_email','pf_mobile']).indexOf(pf.id) !== -1;
+        return '<label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" class="flEdRefExpand" value="'+pf.id+'"'+(checked?' checked':'')+' style="accent-color:var(--teal);"> '+pf.label+'</label>';
+      }).join('')
+    + '</div></div>'
     + '<div style="font-size:11px;color:var(--text3);margin-bottom:14px;">Template tag: <code>{{' + f.label.toUpperCase() + '}}</code>. Renaming the label changes the tag — existing templates using the old tag keep it and won\'t auto-update.</div>'
     + '<div style="display:flex;justify-content:flex-end;gap:8px;">'
     + '<button class="btn" onclick="document.getElementById(\'_flEditPanel\').remove()">Cancel</button>'
     + '<button class="btn btn-primary" onclick="flSaveEdit(' + idx + ')">Save</button></div>';
   document.body.appendChild(panel);
+}
+function flEdTypeChange(type) {
+  var optsWrap = document.getElementById('flEdOptsWrap');
+  if (optsWrap) optsWrap.style.display = (type==='select'||type==='multiselect') ? 'block' : 'none';
+  var refWrap = document.getElementById('flEdRefWrap');
+  if (refWrap) refWrap.style.display = (type==='manager'||type==='person') ? 'block' : 'none';
 }
 function flSaveEdit(idx) {
   var lib = getFieldLib();
@@ -8523,6 +8541,11 @@ function flSaveEdit(idx) {
   f.width = document.getElementById('flEdWidth').value;
   f.placeholder = document.getElementById('flEdPlaceholder').value.trim();
   f.options = (document.getElementById('flEdOptions').value||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
+  // Person-reference config
+  if (f.type === 'manager' || f.type === 'person') {
+    f.refPrefix = (document.getElementById('flEdRefPrefix')?.value.trim() || 'MANAGER').toUpperCase();
+    f.refExpand = Array.from(document.querySelectorAll('.flEdRefExpand:checked')).map(function(cb){ return cb.value; });
+  }
   saveFieldLib(lib);
   document.getElementById('_flEditPanel').remove();
   renderSettingsSection();
