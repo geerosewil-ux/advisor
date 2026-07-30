@@ -8290,8 +8290,12 @@ function fbAddSection(journeyId) {
 function fbEdit(journeyId, idx) {
   var rows = getJourneyForm(journeyId);
   var r = rows[idx];
-  var lib = getCaseFieldLib();
-  var def = lib.find(function(f){ return f.id === r.fid; }) || {};
+  // Look up the field definition across ALL sources (unified lib + entity field arrays)
+  var allDefs = getCaseFieldLib()
+    .concat(typeof getProfileFields==='function'?getProfileFields():[])
+    .concat(typeof getCandidateFields==='function'?getCandidateFields():[])
+    .concat(typeof getRoleFields==='function'?getRoleFields():[]);
+  var def = allDefs.find(function(f){ return f.id === r.fid; }) || {};
   var sections = [];
   rows.forEach(function(x){ if (sections.indexOf(x.section) === -1) sections.push(x.section); });
 
@@ -8319,6 +8323,20 @@ function fbEdit(journeyId, idx) {
     + '<div style="font-size:10.5px;color:var(--text3);">Leave parent as "Always show" to display regardless. Enter the exact option value that triggers this field to appear.</div>'
     + '</div>'
     + '<div style="font-size:11.5px;color:var(--text3);margin-bottom:14px;">Label, type and options are defined in the <a href="#" onclick="document.getElementById(\'_fbEditPanel\').remove();settingsSection=\'caseFields\';renderSettings();return false;" style="color:var(--teal);">Case Fields library</a>.</div>'
+    + ((def.type === 'manager' || def.type === 'person') ? (
+        '<div style="background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:var(--r-sm);padding:12px;margin-bottom:14px;">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">Person-reference expansion</div>'
+        + '<div class="form-field" style="margin-bottom:10px;"><label style="font-size:11.5px;">Placeholder prefix</label>'
+        + '<input id="fbRefPrefix" value="' + (def.refPrefix||'MANAGER').replace(/"/g,'&quot;') + '" style="width:100%;font-family:monospace;">'
+        + '<div style="font-size:10.5px;color:var(--text3);margin-top:2px;">e.g. "MANAGER" gives <code>{{MANAGER}}</code>, <code>{{MANAGER TITLE}}</code></div></div>'
+        + '<label style="font-size:11.5px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Pull through from their profile:</label>'
+        + '<div style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;">'
+        + getProfileFields().map(function(pf){
+            var checked = (def.refExpand||['pf_position','pf_email','pf_mobile']).indexOf(pf.id) !== -1;
+            return '<label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" class="fbRefExpand" value="'+pf.id+'"'+(checked?' checked':'')+' style="accent-color:var(--teal);"> '+pf.label+'</label>';
+          }).join('')
+        + '</div></div>'
+      ) : '')
     + '<div style="display:flex;justify-content:flex-end;gap:8px;">'
     + '<button class="btn" onclick="document.getElementById(\'_fbEditPanel\').remove()">Cancel</button>'
     + '<button class="btn btn-primary" onclick="fbSaveEdit(\'' + journeyId + '\',' + idx + ')">Save</button></div>';
@@ -8337,6 +8355,24 @@ function fbSaveEdit(journeyId, idx) {
     rows[idx].showIf = { fieldId: parentField, value: vals.length===1?vals[0]:null, values: vals.length>1?vals:null };
   } else {
     delete rows[idx].showIf;
+  }
+  // Person-reference config → saved to the library field definition
+  var prefixEl = document.getElementById('fbRefPrefix');
+  if (prefixEl) {
+    var refPrefix = (prefixEl.value.trim() || 'MANAGER').toUpperCase();
+    var refExpand = Array.from(document.querySelectorAll('.fbRefExpand:checked')).map(function(cb){ return cb.value; });
+    // Update the library field def AND all entity field arrays that hold this field
+    var lib = getFieldLib();
+    var libField = lib.find(function(f){ return f.id === rows[idx].fid; });
+    if (libField) { libField.refPrefix = refPrefix; libField.refExpand = refExpand; saveFieldLib(lib); }
+    // Also update in profile/candidate/role arrays if present
+    [['profileFields',getProfileFields],['candidateFields',getCandidateFields],['roleFields',getRoleFields]].forEach(function(pair){
+      var arr = appSettings[pair[0]];
+      if (!arr) return;
+      var fx = arr.find(function(f){ return f.id === rows[idx].fid; });
+      if (fx) { fx.refPrefix = refPrefix; fx.refExpand = refExpand; }
+    });
+    saveSettings(appSettings);
   }
   saveJourneyForm(journeyId, rows);
   document.getElementById('_fbEditPanel').remove();
@@ -11004,8 +11040,10 @@ function renderSettingsSection() {
               <option value="select">Single Select</option>
               <option value="multiselect">Multi-Select</option>
               <option value="checklist">Checklist (tick-off tasks)</option>
-              <option value="location">Office Location</option>
-              <option value="manager">Manager (from People)</option>
+              <option value="location">Office Location (reference)</option>
+              <option value="manager">Manager / Person (from People)</option>
+              <option value="award">Award (reference)</option>
+              <option value="classification">Classification (filtered by Award)</option>
             </select>
           </div>
           <div class="form-field" style="flex:1;margin:0;">
