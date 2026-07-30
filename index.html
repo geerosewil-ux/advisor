@@ -4634,12 +4634,35 @@ var DEFAULT_ROLE_FIELDS = [
 ];
 
 function getRoleFields() {
-  return (appSettings.roleFields && appSettings.roleFields.length) ? appSettings.roleFields : JSON.parse(JSON.stringify(DEFAULT_ROLE_FIELDS));
+  return resolveFormFields(appSettings.roleForm, DEFAULT_ROLE_FIELDS);
 }
-function saveRoleFields(fields) { appSettings.roleFields = fields; saveSettings(); }
+function saveRoleFields(fields) {
+  // Store only references (fid + placement)
+  appSettings.roleForm = fields.map(function(f){ return { fid: f.fid||f.id, section: f.section||f.group, width: f.width, required: f.required, showIf: f.showIf }; });
+  saveSettings();
+}
 
 // Clean up malformed auto-created fields (reference sub-attributes that became standalone fields,
 // and fields whose label is just their raw ID). Run once on load.
+// Nuclear reset — wipe the merged/cached field arrays and regenerate clean from defaults.
+// Does NOT touch saved records (cases, people, candidates, templates).
+function rebuildFieldSystem() {
+  delete appSettings.fieldLibV2;
+  delete appSettings.fieldLib;
+  delete appSettings.caseFieldLib;
+  delete appSettings.customFields;
+  delete appSettings.roleForm;
+  delete appSettings.candidateForm;
+  delete appSettings.profileForm;
+  delete appSettings.roleFields;
+  delete appSettings.candidateFields;
+  delete appSettings.profileFields;
+  saveSettings();
+  getFieldLib(); // reseed fresh with permanent fids
+  renderSettingsSection();
+  toast('Field system rebuilt — clean single-record library');
+}
+
 function cleanupMalformedFields() {
   var reserved = /^(PRONOUN|LOCATION\b|OFFICE LOCATION|WORK LOCATION|AWARD\b|CLASSIFICATION|LEVEL$|MANAGER\b|ORGANISATION|ORGANIZATION|ER ADVISER|ADVISER|YOUR TITLE|ER EMAIL|ER CONTACT|ORG ADDRESS)/i;
   var changed = false;
@@ -4803,36 +4826,32 @@ function resolveEntityFields(entity, entityType) {
   // Map each stored field value to its label (uppercase) for exact-match.
   // Read via alias IDs so old field IDs (pf_manager, cand_manager) still resolve.
   fieldDefs.forEach(function(f) {
-    var raw = entity[f.id];
-    // If not found under this field's ID, check alias IDs (merged old fields)
-    if ((raw === undefined || raw === null || raw === '') && f.aliasIds) {
-      for (var ai = 0; ai < f.aliasIds.length; ai++) {
-        if (entity[f.aliasIds[ai]]) { raw = entity[f.aliasIds[ai]]; break; }
-      }
-    }
+    var raw = readEntityFieldValue(entity, f);
     if (raw === undefined || raw === null || raw === '') return;
     var val = raw;
-    // Format dates
     if (f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(raw))) val = formatDateValue(raw);
     var labelKey = (f.label || '').toUpperCase().trim();
-    if (labelKey) {
-      values[labelKey] = val;
-    }
-    // Also store under the field ID for internal lookups
-    values[f.id] = val;
-    // Reference-field expansion
-    if (f.type === 'location' || /\blocation\b/i.test(f.label||'')) {
-      expandLocationAttributes(val, values);
-    }
+    if (labelKey) values[labelKey] = val;
+    values[f.id] = val;  // f.id is the fid
+    if (f.type === 'location' || /\blocation\b/i.test(f.label||'')) expandLocationAttributes(val, values);
     if (f.type === 'award') expandAwardAttributes(val, '', values);
     if (f.type === 'classification') expandAwardAttributes('', val, values);
-    // Manager / person-reference fields — expand configured attributes from the linked profile
     if (f.type === 'manager' || f.type === 'person' || /\bmanager\b/i.test(f.label||'')) {
       var prefix = f.refPrefix || (/(\bmanager\b)/i.test(f.label||'') ? 'MANAGER' : f.label.toUpperCase().trim());
       var expandIds = f.refExpand || ['pf_position','pf_email','pf_mobile'];
       expandPersonReference(val, prefix, expandIds, values);
       if (!values['MANAGER'] && /\bmanager\b/i.test(f.label||'')) values['MANAGER'] = values[prefix] || val;
     }
+  });
+
+  // Compute composite fields from the other resolved values (done last, after all values are set)
+  fieldDefs.forEach(function(f) {
+    if (f.type !== 'composite' || !f.pattern) return;
+    // Use stored value if present (user may have overridden), else compute
+    var stored = readEntityFieldValue(entity, f);
+    var labelKey = (f.label||'').toUpperCase().trim();
+    var computed = stored || computeCompositeFromValues(f.pattern, values);
+    if (computed) { values[labelKey] = computed; values[f.id] = computed; }
   });
 
   // Inject org/adviser fields from settings (exact-match labels)
@@ -7142,8 +7161,8 @@ function editCfField(idx, mode, journeyId) {
   panel.id = '_cfEditPanel';
   panel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);z-index:9999;width:500px;max-height:90vh;overflow-y:auto;padding:24px;';
 
-  var typeOptions = ['text','textarea','date','datetime','number','yesno','select','multiselect','location','manager','award','classification'].map(function(t) {
-    return '<option value="' + t + '"' + (f.type===t?' selected':'') + '>' + {text:'Text',textarea:'Text area',date:'Date',datetime:'Date & time',number:'Number',yesno:'Yes / No',select:'Single select',multiselect:'Multi-select',location:'Location (reference)',manager:'Manager (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'}[t] + '</option>';
+  var typeOptions = ['text','textarea','date','datetime','number','yesno','select','multiselect','composite','location','manager','award','classification'].map(function(t) {
+    return '<option value="' + t + '"' + (f.type===t?' selected':'') + '>' + {text:'Text',textarea:'Text area',date:'Date',datetime:'Date & time',number:'Number',yesno:'Yes / No',select:'Single select',multiselect:'Multi-select',composite:'Composite (combined fields)',location:'Location (reference)',manager:'Manager (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'}[t] + '</option>';
   }).join('');
 
   panel.innerHTML = `
@@ -7313,6 +7332,18 @@ function renderCaseModalFields(journeyId) {
   var pSel = document.getElementById('sys_pronouns');
   if (pSel) pSel.addEventListener('change', function(){ handleSystemPronounChange(this.value); });
 
+  // Composite fields: recompute on any input; mark as overridden if user edits the composite directly
+  container.addEventListener('input', function(ev){
+    var t = ev.target;
+    if (t && t.hasAttribute && t.hasAttribute('data-composite')) {
+      t.dataset.overridden = '1'; // user typed directly → stop auto-composing
+    } else {
+      recomputeCompositeFields(journeyId);
+    }
+  });
+  // Initial composite compute
+  setTimeout(function(){ recomputeCompositeFields(journeyId); }, 0);
+
   setTimeout(function() { applyCascadingRules(journeyId); }, 0);
 
   var locSel = document.getElementById('caseLocationSelect');
@@ -7446,14 +7477,10 @@ function renderCfFieldInput(f) {
     case 'classification':
       // Filtered by the award field — starts empty, populated when award selected
       return label + '<select id="cf_input_' + f.id + '" data-classification-field="' + f.id + '"><option value="">— Select award first —</option></select>';
+    case 'composite':
+      return label + '<input id="cf_input_' + f.id + '" data-composite="' + (f.pattern||'').replace(/"/g,'&quot;') + '" placeholder="Auto-fills from: ' + (f.pattern||'').replace(/"/g,'&quot;') + '" style="background:#FFFBF5;">'
+        + '<div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
     case 'manager':
-      var mgPeople = getPeople();
-      var mgrOpts = '<option value="">— Select manager —</option>' + mgPeople.map(function(p){
-        var pnm = getEntityDisplayName(p, getProfileFields());
-        return '<option value="' + p.id + '" data-dept="' + (p.pf_department||'').replace(/"/g,'&quot;') + '">'
-          + pnm + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
-      }).join('');
-      return label + '<select id="cf_input_' + f.id + '" data-manager-field="' + f.id + '">' + mgrOpts + '</select>';
     default: {
       // Auto-detect date/datetime from label when type is generic text
       var norm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
@@ -7517,6 +7544,15 @@ function getCaseFormValues(journeyId) {
     } else if (effectiveType === 'date') {
       var dval = document.getElementById('cf_input_' + f.id)?.value || '';
       val = dval ? formatDateValue(dval) : '';
+    } else if (effectiveType === 'composite') {
+      var cel = document.getElementById('cf_input_' + f.id);
+      val = cel ? cel.value.trim() : '';
+      // If empty (not yet computed), compute from the pattern using current values
+      if (!val && f.pattern) {
+        var liveVals = {};
+        fields.forEach(function(ff){ var e=document.getElementById('cf_input_'+ff.id); if(e&&e.value) liveVals[(ff.label||'').toUpperCase().trim()]=e.value; });
+        val = computeCompositeFromValues(f.pattern, liveVals);
+      }
     } else {
       val = document.getElementById('cf_input_' + f.id)?.value?.trim() || '';
     }
@@ -8144,7 +8180,7 @@ var DEFAULT_CASE_FORM_BASE = [
   { id:'cf_starttime',      section:'Employment Details',  label:'Start Time (first day)', placeholder:'e.g. 9:00 AM',                type:'text',     width:'half', required:false, enabled:true },
   { id:'cf_contact',        section:'Employment Details',  label:'Contact on Arrival',     placeholder:'Defaults to manager if blank', type:'text',     width:'half', required:false, enabled:true },
   // Section: Reporting & HR
-  { id:'cf_manager',        section:'Reporting & HR',      label:'Manager',                placeholder:'e.g. Tom Hughes',              type:'text',     width:'half', required:false, enabled:true },
+  { id:'cf_manager',        section:'Reporting & HR',      label:'Manager',                placeholder:'',              type:'manager',  width:'half', required:false, enabled:true },
   { id:'cf_hrbp',           section:'Reporting & HR',      label:'HR Business Partner',    placeholder:'e.g. Sarah Lee',               type:'text',     width:'half', required:false, enabled:true },
   { id:'cf_probation',      section:'Reporting & HR',      label:'Probation Period',       placeholder:'',                             type:'select',   width:'half', required:false, enabled:true,
     options:['3 months','6 months','12 months','No probation'] },
@@ -8169,41 +8205,27 @@ function getCaseFormForJourney(journeyId) {
   if (journeyId === '__role__') return getRoleFields();
 
   var rows = getJourneyForm(journeyId);
-  var lib = getCaseFieldLib();
-  var allDefaults = DEFAULT_CASE_FORM_BASE;
 
   return rows.map(function(r) {
-    // 1. Exact ID match in library
-    var def = lib.find(function(f){ return f.id === r.fid; });
-
-    // 2. Try prefix-stripped match (cf_ vs fl_)
-    if (!def) {
-      var stripped = r.fid.replace(/^(?:cf|fl|pf)_/, '');
-      def = lib.find(function(f){ return f.id.replace(/^(?:cf|fl|pf)_/, '') === stripped; });
-    }
-
-    // 3. Try label-derived match
-    if (!def) {
-      var labelGuess = r.fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
-      def = lib.find(function(f){ return f.label.toLowerCase() === labelGuess.toLowerCase(); });
-    }
-
-    // 4. Fall back to DEFAULT_CASE_FORM_BASE
-    if (!def) {
-      def = allDefaults.find(function(f){ return f.id === r.fid; });
-    }
-
-    if (!def) return null;
+    if (!r || !r.fid) return null;
+    var def = getFieldByAnyId(r.fid);
+    if (!def || !def.label) return null;
     return {
-      id: def.id,
+      id: def.fid,
+      fid: def.fid,
+      aliasIds: def.aliasIds || [],
       label: def.label,
       type: def.type || 'text',
       options: def.options || [],
       placeholder: def.placeholder || '',
-      section: r.section || def.section || 'Details',
+      refPrefix: def.refPrefix,
+      refExpand: def.refExpand,
+      section: r.section || def.group || 'Details',
+      group: r.section || def.group || 'Details',
       width: r.width || def.width || 'half',
       required: !!r.required,
-      enabled: r.enabled !== false
+      enabled: r.enabled !== false,
+      showIf: r.showIf || null
     };
   }).filter(Boolean);
 }
@@ -8414,10 +8436,10 @@ function fbOpenPicker(journeyId, section) {
   var lib = getCaseFieldLib();
   var rows = getJourneyForm(journeyId);
   var usedIds = rows.map(function(r){ return r.fid; });
-  var available = lib.filter(function(f){ return usedIds.indexOf(f.id) === -1; });
+  var available = lib.filter(function(f){ return usedIds.indexOf(f.fid) === -1; });
 
   document.getElementById('_fbPicker') && document.getElementById('_fbPicker').remove();
-  var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',location:'Location'};
+  var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',location:'Location',manager:'Manager/Person',award:'Award',classification:'Classification'};
   var picker = document.createElement('div');
   picker.id = '_fbPicker';
   picker.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);z-index:9999;width:440px;max-height:80vh;display:flex;flex-direction:column;padding:20px;';
@@ -8427,14 +8449,14 @@ function fbOpenPicker(journeyId, section) {
     + '<input id="fbPickerSearch" placeholder="Search fields\u2026" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;font-size:12.5px;margin-bottom:10px;" oninput="fbFilterPicker(this.value)">'
     + '<div id="fbPickerList" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px;">'
     + (available.length ? available.map(function(f) {
-        return '<div class="fb-picker-item" data-label="' + f.label.toLowerCase() + '" onclick="fbAddFromLib(\'' + journeyId + '\',\'' + f.id + '\',\'' + section.replace(/'/g, "\\'") + '\')" '
+        return '<div class="fb-picker-item" data-label="' + (f.label||'').toLowerCase() + '" onclick="fbAddFromLib(\'' + journeyId + '\',\'' + f.fid + '\',\'' + section.replace(/'/g, "\\'") + '\')" '
           + 'style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;background:white;" '
           + 'onmouseover="this.style.borderColor=\'var(--teal)\';this.style.background=\'var(--teal-lt)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'white\'">'
           + '<span style="font-size:13px;font-weight:600;color:var(--text);flex:1;">' + f.label + '</span>'
           + '<span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;background:var(--teal-lt);color:var(--teal);">' + (typeLabels[f.type]||'Text') + '</span></div>';
-      }).join('') : '<div style="color:var(--text3);font-size:13px;padding:10px 0;">All library fields are already in this form. Create new fields in Settings \u2192 Case Fields.</div>')
+      }).join('') : '<div style="color:var(--text3);font-size:13px;padding:10px 0;">All library fields are already in this form. Create new fields in Settings \u2192 Fields.</div>')
     + '</div>'
-    + '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:11.5px;color:var(--text3);">Need a new field? <a href="#" onclick="document.getElementById(\'_fbPicker\').remove();settingsSection=\'caseFields\';renderSettings();return false;" style="color:var(--teal);">Create it in the Case Fields library</a></div>';
+    + '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:11.5px;color:var(--text3);">Need a new field? <a href="#" onclick="document.getElementById(\'_fbPicker\').remove();settingsSection=\'caseFields\';renderSettings();return false;" style="color:var(--teal);">Create it in the Fields library</a></div>';
   document.body.appendChild(picker);
 }
 function fbFilterPicker(q) {
@@ -8445,8 +8467,7 @@ function fbFilterPicker(q) {
 }
 function fbAddFromLib(journeyId, fid, section) {
   var rows = getJourneyForm(journeyId);
-  var lib = getCaseFieldLib();
-  var def = lib.find(function(f){ return f.id === fid; }) || {};
+  var def = getFieldByAnyId(fid) || {};
   rows.push({ fid: fid, section: section, required: false, width: def.width || 'half', enabled: true });
   saveJourneyForm(journeyId, rows);
   document.getElementById('_fbPicker') && document.getElementById('_fbPicker').remove();
@@ -8468,10 +8489,9 @@ function cflAdd() {
   if (!label) { alert('Field label required.'); return; }
   var lib = getFieldLib();
   if (lib.find(function(f){ return f.label.toLowerCase() === label.toLowerCase(); })) { alert('A field with that label already exists.'); return; }
-  var id = 'fl_' + label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   var type = document.getElementById('cflType').value;
   var options = (document.getElementById('cflOptions').value||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
-  lib.push({ id: id, label: label, group: (document.getElementById('cflGroup')||{}).value?.trim() || 'General', type: type, options: options, placeholder: document.getElementById('cflPlaceholder').value.trim(), width: document.getElementById('cflWidth').value });
+  lib.push({ fid: genFid(), label: label, group: (document.getElementById('cflGroup')||{}).value?.trim() || 'General', type: type, options: options, placeholder: document.getElementById('cflPlaceholder').value.trim(), width: document.getElementById('cflWidth').value, aliasIds: [] });
   saveFieldLib(lib);
   renderSettingsSection();
   toast('Field added');
@@ -8494,8 +8514,8 @@ function flEditPanel(idx) {
     + '<div class="form-row" style="gap:8px;margin-bottom:10px;">'
     + '<div class="form-field" style="flex:1;margin:0;"><label>Type</label>'
     + '<select id="flEdType" onchange="flEdTypeChange(this.value)">'
-    + ['text','textarea','date','datetime','number','yesno','select','multiselect','checklist','location','manager','award','classification'].map(function(t){
-        var labels={text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes / No',select:'Single Select',multiselect:'Multi-Select',checklist:'Checklist',location:'Office Location (reference)',manager:'Manager / Person (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'};
+    + ['text','textarea','date','datetime','number','yesno','select','multiselect','checklist','composite','location','manager','award','classification'].map(function(t){
+        var labels={text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes / No',select:'Single Select',multiselect:'Multi-Select',checklist:'Checklist',composite:'Composite (combined fields)',location:'Office Location (reference)',manager:'Manager / Person (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'};
         return '<option value="'+t+'" '+(f.type===t?'selected':'')+'>'+labels[t]+'</option>';
       }).join('')
     + '</select></div>'
@@ -8516,6 +8536,13 @@ function flEditPanel(idx) {
         return '<label style="display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;"><input type="checkbox" class="flEdRefExpand" value="'+pf.id+'"'+(checked?' checked':'')+' style="accent-color:var(--teal);"> '+pf.label+'</label>';
       }).join('')
     + '</div></div>'
+    + '<div id="flEdCompositeWrap" style="display:' + (f.type==='composite'?'block':'none') + ';margin-bottom:12px;padding:12px;background:#FEF3E2;border:1px solid #F5C97A;border-radius:var(--r-sm);">'
+    + '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#B8791A;margin-bottom:8px;">Composite pattern</div>'
+    + '<div class="form-field" style="margin:0;"><label style="font-size:11.5px;">Pattern — combine other fields with <code>{{FIELD LABEL}}</code></label>'
+    + '<input id="flEdPattern" value="' + (f.pattern||'').replace(/"/g,'&quot;') + '" placeholder="{{PREFERRED NAME}} {{SURNAME}}" style="width:100%;font-family:monospace;">'
+    + '<div style="font-size:10.5px;color:var(--text3);margin-top:4px;">Auto-fills from those fields; you can still type over it. Example: <code>{{PREFERRED NAME}} {{SURNAME}}</code> → "Jane Smith"</div></div>'
+    + '<div style="font-size:10.5px;color:var(--text3);margin-top:6px;">Available fields: ' + getFieldLib().filter(function(x){return x.type!=='composite';}).map(function(x){return '<code style="cursor:pointer;color:var(--teal);" onclick="var p=document.getElementById(\'flEdPattern\');p.value+=\'{{'+x.label.toUpperCase()+'}}\';">{{'+x.label.toUpperCase()+'}}</code>';}).slice(0,12).join(' ') + '</div>'
+    + '</div>'
     + '<div style="font-size:11px;color:var(--text3);margin-bottom:14px;">Template tag: <code>{{' + f.label.toUpperCase() + '}}</code>. Renaming the label changes the tag — existing templates using the old tag keep it and won\'t auto-update.</div>'
     + '<div style="display:flex;justify-content:flex-end;gap:8px;">'
     + '<button class="btn" onclick="document.getElementById(\'_flEditPanel\').remove()">Cancel</button>'
@@ -8527,6 +8554,8 @@ function flEdTypeChange(type) {
   if (optsWrap) optsWrap.style.display = (type==='select'||type==='multiselect') ? 'block' : 'none';
   var refWrap = document.getElementById('flEdRefWrap');
   if (refWrap) refWrap.style.display = (type==='manager'||type==='person') ? 'block' : 'none';
+  var compWrap = document.getElementById('flEdCompositeWrap');
+  if (compWrap) compWrap.style.display = (type==='composite') ? 'block' : 'none';
 }
 function flSaveEdit(idx) {
   var lib = getFieldLib();
@@ -8541,11 +8570,14 @@ function flSaveEdit(idx) {
   f.width = document.getElementById('flEdWidth').value;
   f.placeholder = document.getElementById('flEdPlaceholder').value.trim();
   f.options = (document.getElementById('flEdOptions').value||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
-  // Person-reference config
   if (f.type === 'manager' || f.type === 'person') {
     f.refPrefix = (document.getElementById('flEdRefPrefix')?.value.trim() || 'MANAGER').toUpperCase();
     f.refExpand = Array.from(document.querySelectorAll('.flEdRefExpand:checked')).map(function(cb){ return cb.value; });
   }
+  if (f.type === 'composite') {
+    f.pattern = document.getElementById('flEdPattern')?.value.trim() || '';
+  }
+  // Single record — no propagation needed. Forms resolve label/type live from here.
   saveFieldLib(lib);
   document.getElementById('_flEditPanel').remove();
   renderSettingsSection();
@@ -8581,105 +8613,140 @@ function cflToggleOptions(type) {
 }
 
 // ── UNIFIED FIELDS LIBRARY (case forms + template placeholders) ──────────
-function getFieldLib() {
-  if (!appSettings.fieldLib || !appSettings.fieldLib.length) {
-    var seen = {};
-    var lib = [];
-    var addDef = function(f) {
-      var label = f.label || f.name;
-      if (!label) return;
-      var key = label.toLowerCase().trim();
-      if (seen[key]) {
-        // Merge-by-meaning: record this field's ID as an alias of the existing unified field
-        var existing = lib.find(function(x){ return x.label.toLowerCase().trim() === key; });
-        if (existing && f.id && f.id !== existing.id) {
-          existing.aliasIds = existing.aliasIds || [];
-          if (existing.aliasIds.indexOf(f.id) === -1) existing.aliasIds.push(f.id);
-        }
-        return;
-      }
-      seen[key] = true;
-      var entry = {
-        id: f.id || ('fl_' + label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')),
-        label: label,
-        group: f.group || 'General',
-        type: f.type || 'text',
-        options: f.options || [],
-        placeholder: f.placeholder || '',
-        width: f.width || 'half',
-        aliasIds: f.aliasIds || []
-      };
-      lib.push(entry);
-    };
-    // Merge ALL sources — merge-by-meaning collapses same-label fields, recording alias IDs
-    (appSettings.caseFieldLib || []).forEach(addDef);
-    (appSettings.customFields || []).forEach(addDef);
-    (appSettings.caseFormBase || DEFAULT_CASE_FORM_BASE).forEach(addDef);
-    DEFAULT_CASE_FORM_BASE.forEach(addDef);
-    Object.keys(appSettings.caseFormByType||{}).forEach(function(j) {
-      (appSettings.caseFormByType[j]||[]).forEach(addDef);
-    });
-    // Merge People, Candidate, Role field definitions into the master library
-    (typeof DEFAULT_PROFILE_FIELDS !== 'undefined' ? DEFAULT_PROFILE_FIELDS : []).forEach(addDef);
-    (appSettings.profileFields || []).forEach(addDef);
-    (typeof DEFAULT_CANDIDATE_FIELDS !== 'undefined' ? DEFAULT_CANDIDATE_FIELDS : []).forEach(addDef);
-    (appSettings.candidateFields || []).forEach(addDef);
-    (typeof DEFAULT_ROLE_FIELDS !== 'undefined' ? DEFAULT_ROLE_FIELDS : []).forEach(addDef);
-    (appSettings.roleFields || []).forEach(addDef);
-    appSettings.fieldLib = lib;
-    saveSettings();
-  }
-  // Deduplicate in place, preserving alias IDs
-  var seen2 = {};
-  var merged = [];
-  appSettings.fieldLib.forEach(function(f) {
-    var key = (f.label||'').toLowerCase().trim();
-    if (!key) return;
-    if (seen2[key]) {
-      var ex = merged.find(function(x){ return x.label.toLowerCase().trim() === key; });
-      if (ex && f.id && f.id !== ex.id) {
-        ex.aliasIds = ex.aliasIds || [];
-        if (ex.aliasIds.indexOf(f.id) === -1) ex.aliasIds.push(f.id);
-      }
+// ── UNIFIED FIELD SYSTEM (single-record architecture) ─────────────────────
+// One field record per field. Permanent `fid` is the key. Forms and templates
+// store only references to fid. Labels/types live ONLY here. No copies, no sync.
+
+function genFid() {
+  return 'f_' + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-3);
+}
+
+// Seed the library ONCE from all legacy sources, assigning permanent fids and
+// recording every old ID as an aliasId (so old saved values still resolve).
+function seedFieldLib() {
+  var seen = {};   // label(lower) → library entry
+  var lib = [];
+  var addDef = function(f, defaultGroup) {
+    var label = (f.label || f.name || '').trim();
+    if (!label) return;
+    var key = label.toLowerCase();
+    if (seen[key]) {
+      // same-meaning field → record its old ID as an alias
+      var ex = seen[key];
+      if (f.id && f.id !== ex.fid && ex.aliasIds.indexOf(f.id) === -1) ex.aliasIds.push(f.id);
+      // upgrade type if the existing was generic text and this one is specific
+      if ((ex.type === 'text' || !ex.type) && f.type && f.type !== 'text') ex.type = f.type;
+      if ((!ex.options || !ex.options.length) && f.options && f.options.length) ex.options = f.options.slice();
+      if (f.refPrefix && !ex.refPrefix) ex.refPrefix = f.refPrefix;
+      if (f.refExpand && !ex.refExpand) ex.refExpand = f.refExpand;
       return;
     }
-    seen2[key] = true;
-    merged.push(f);
-  });
-  appSettings.fieldLib = merged;
-  return appSettings.fieldLib;
+    var entry = {
+      fid: genFid(),
+      label: label,
+      group: f.group || defaultGroup || 'General',
+      type: f.type || 'text',
+      options: f.options ? f.options.slice() : [],
+      placeholder: f.placeholder || '',
+      width: f.width || 'half',
+      refPrefix: f.refPrefix || undefined,
+      refExpand: f.refExpand || undefined,
+      aliasIds: []
+    };
+    if (f.id) entry.aliasIds.push(f.id);   // original ID becomes an alias for legacy value reads
+    seen[key] = entry;
+    lib.push(entry);
+  };
+  // Order matters: specific-typed defaults first so they define the canonical type
+  (typeof DEFAULT_PROFILE_FIELDS   !== 'undefined' ? DEFAULT_PROFILE_FIELDS   : []).forEach(function(f){ addDef(f,'People'); });
+  (typeof DEFAULT_CANDIDATE_FIELDS !== 'undefined' ? DEFAULT_CANDIDATE_FIELDS : []).forEach(function(f){ addDef(f,'Candidate'); });
+  (typeof DEFAULT_ROLE_FIELDS      !== 'undefined' ? DEFAULT_ROLE_FIELDS      : []).forEach(function(f){ addDef(f,'Role'); });
+  DEFAULT_CASE_FORM_BASE.forEach(function(f){ addDef(f,'Case'); });
+  // Then any user-saved variants (add new labels, register their IDs as aliases)
+  (appSettings.profileFields   || []).forEach(function(f){ addDef(f,'People'); });
+  (appSettings.candidateFields || []).forEach(function(f){ addDef(f,'Candidate'); });
+  (appSettings.roleFields      || []).forEach(function(f){ addDef(f,'Role'); });
+  (appSettings.caseFieldLib    || []).forEach(function(f){ addDef(f,'Case'); });
+  (appSettings.customFields    || []).forEach(function(f){ addDef(f,'General'); });
+  return lib;
 }
-function saveFieldLib(lib) { appSettings.fieldLib = lib; saveSettings(); }
 
-// Alias — everything that used the case field library now reads the unified one
+function getFieldLib() {
+  if (!appSettings.fieldLibV2 || !appSettings.fieldLibV2.length) {
+    appSettings.fieldLibV2 = seedFieldLib();
+    saveSettings();
+  }
+  return appSettings.fieldLibV2;
+}
+function saveFieldLib(lib) { appSettings.fieldLibV2 = lib; saveSettings(); }
 function getCaseFieldLib() { return getFieldLib(); }
+function saveCaseFieldLib(lib) { saveFieldLib(lib); }
 
-// Build a map from any known field ID (including aliases) → unified library field
+// Resolve a form's stored references into full field objects, pulling label/type/
+// options LIVE from the library (single source of truth) merged with placement.
+function resolveFormFields(storedRows, defaultDefs) {
+  var lib = getFieldLib();
+  var rows = (storedRows && storedRows.length) ? storedRows : (defaultDefs || []);
+  var out = [];
+  rows.forEach(function(row) {
+    if (!row) return;
+    var libF = getFieldByAnyId(row.fid || row.id || row.label);
+    if (!libF && row.label) {
+      libF = { fid: genFid(), label: row.label, group: row.group||row.section||'General',
+               type: row.type||'text', options: row.options||[], placeholder: row.placeholder||'',
+               width: row.width||'half', aliasIds: row.id?[row.id]:[] };
+      lib.push(libF); saveFieldLib(lib);
+    }
+    if (!libF || !libF.label) return;
+    out.push({
+      id: libF.fid, fid: libF.fid, aliasIds: libF.aliasIds || [],
+      label: libF.label, type: libF.type||'text', options: libF.options || [],
+      placeholder: libF.placeholder || '', refPrefix: libF.refPrefix, refExpand: libF.refExpand,
+      group: row.section || row.group || libF.group || 'General',
+      section: row.section || row.group || libF.group || 'General',
+      width: row.width || libF.width || 'half',
+      required: !!row.required, enabled: row.enabled !== false, showIf: row.showIf || null
+    });
+  });
+  return out;
+}
+
+// Look up a field by its permanent fid
+function getFieldByFid(fid) {
+  return getFieldLib().find(function(f){ return f.fid === fid; }) || null;
+}
+// Look up a field by ANY identifier: fid, alias ID, or (fallback) label
+function getFieldByAnyId(idOrLabel) {
+  if (idOrLabel == null || idOrLabel === '') return null;
+  var lib = getFieldLib();
+  var byFid = lib.find(function(f){ return f.fid === idOrLabel; });
+  if (byFid) return byFid;
+  var byAlias = lib.find(function(f){ return (f.aliasIds||[]).indexOf(idOrLabel) !== -1; });
+  if (byAlias) return byAlias;
+  var lower = String(idOrLabel).toLowerCase().trim();
+  return lib.find(function(f){ return (f.label||'').toLowerCase().trim() === lower; }) || null;
+}
+// Legacy-compatible aliases
 function getFieldIdAliasMap() {
   var map = {};
   getFieldLib().forEach(function(f) {
-    map[f.id] = f;
+    map[f.fid] = f;
     (f.aliasIds || []).forEach(function(aid){ map[aid] = f; });
   });
   return map;
 }
+function resolveFieldId(fieldId) { return getFieldByAnyId(fieldId); }
 
-// Resolve any field ID (old or aliased) to its unified field definition
-function resolveFieldId(fieldId) {
-  return getFieldIdAliasMap()[fieldId] || null;
-}
-
-// Given an entity record, read a value by unified field — checking all alias IDs
-function readEntityFieldValue(entity, unifiedField) {
-  if (!entity || !unifiedField) return '';
-  if (entity[unifiedField.id]) return entity[unifiedField.id];
-  var aliasIds = unifiedField.aliasIds || [];
+// Read a saved value from an entity for a given library field — tries fid then all alias IDs
+function readEntityFieldValue(entity, field) {
+  if (!entity || !field) return '';
+  if (entity[field.fid] != null && entity[field.fid] !== '') return entity[field.fid];
+  var aliasIds = field.aliasIds || [];
   for (var i = 0; i < aliasIds.length; i++) {
-    if (entity[aliasIds[i]]) return entity[aliasIds[i]];
+    if (entity[aliasIds[i]] != null && entity[aliasIds[i]] !== '') return entity[aliasIds[i]];
   }
   return '';
 }
-function saveCaseFieldLib(lib) { saveFieldLib(lib); }
 
 // ── OLD CASE FIELDS LIBRARY (superseded, kept for reference) ─────────────
 function _oldGetCaseFieldLib() {
@@ -8720,7 +8787,8 @@ function getJourneyForm(journeyId) {
     return getRoleFields().map(function(f){
       return { fid: f.id, section: f.group||'Role Details', required: !!f.required, width: f.width||'half', enabled: f.enabled !== false };
     });
-  } appSettings.caseFormsByJourney = {};
+  }
+  if (!appSettings.caseFormsByJourney) appSettings.caseFormsByJourney = {};
   var existing = appSettings.caseFormsByJourney[journeyId];
 
   if (!existing || !existing.length) {
@@ -8737,13 +8805,27 @@ function getJourneyForm(journeyId) {
   // Auto-add Pronouns if missing
   var lib = getCaseFieldLib();
   var pronounDef = lib.find(function(f){ return isPronounField(f.label); });
-  if (pronounDef && !existing.find(function(r){ return isPronounField(r.fid) || r.fid === pronounDef.id || r.fid.replace(/^(?:cf|fl|pf)_/,'') === pronounDef.id.replace(/^(?:cf|fl|pf)_/,''); })) {
-    var insertAt = 2;
-    var prefIdx = existing.findIndex(function(r){ return r.fid === 'cf_preferred' || r.fid.includes('preferred'); });
-    if (prefIdx >= 0) insertAt = prefIdx + 1;
-    existing.splice(insertAt, 0, { fid: pronounDef.id, section: 'Employee Details', required: false, width: 'half', enabled: true });
-    appSettings.caseFormsByJourney[journeyId] = existing;
-    saveSettings();
+  if (pronounDef) {
+    var pronounFid = pronounDef.fid;
+    var hasPronoun = existing.some(function(r){
+      if (!r || !r.fid) return false;
+      if (r.fid === pronounFid) return true;
+      // Check via library resolution (handles alias IDs)
+      var rf = getFieldByAnyId(r.fid);
+      return rf && rf.fid === pronounFid;
+    });
+    if (!hasPronoun) {
+      var insertAt = 2;
+      var prefIdx = existing.findIndex(function(r){
+        if (!r || !r.fid) return false;
+        var rf = getFieldByAnyId(r.fid);
+        return rf && /preferred/i.test(rf.label||'');
+      });
+      if (prefIdx >= 0) insertAt = prefIdx + 1;
+      existing.splice(insertAt, 0, { fid: pronounFid, section: 'Employee Details', required: false, width: 'half', enabled: true });
+      appSettings.caseFormsByJourney[journeyId] = existing;
+      saveSettings();
+    }
   }
 
   return appSettings.caseFormsByJourney[journeyId];
@@ -8753,35 +8835,17 @@ function saveJourneyForm(journeyId, rows) {
   // Special form types — reconstruct and save their field arrays
   if (journeyId === '__people__') {
     var allLib = getCaseFieldLib();
-    var existing = getProfileFields();
-    var updated = rows.map(function(r) {
-      var base = allLib.find(function(f){ return f.id === r.fid; })
-        || existing.find(function(f){ return f.id === r.fid; })
-        || { id: r.fid, label: r.fid, type: 'text' };
-      return Object.assign({}, base, { group: r.section || base.group || 'Personal', required: !!r.required, width: r.width || base.width || 'half', enabled: r.enabled !== false });
-    });
+    var updated = rows.map(function(r){ return { fid: r.fid, section: r.section, width: r.width, required: !!r.required, showIf: r.showIf }; });
     saveProfileFields(updated);
     return;
   }
   if (journeyId === '__candidates__') {
-    var allLib2 = getCaseFieldLib();
-    var existingC = getCandidateFields();
-    var updatedC = rows.map(function(r) {
-      var base2 = allLib2.find(function(f){ return f.id === r.fid; })
-        || existingC.find(function(f){ return f.id === r.fid; })
-        || { id: r.fid, label: r.fid, type: 'text' };
-      return Object.assign({}, base2, { group: r.section || base2.group || 'Application', required: !!r.required, width: r.width || base2.width || 'half', enabled: r.enabled !== false });
-    });
+    var updatedC = rows.map(function(r){ return { fid: r.fid, section: r.section, width: r.width, required: !!r.required, showIf: r.showIf }; });
     saveCandidateFields(updatedC);
     return;
   }
   if (journeyId === '__role__') {
-    var existingR = getRoleFields();
-    var updatedR = rows.map(function(r) {
-      var baseR = existingR.find(function(f){ return f.id === r.fid; })
-        || { id: r.fid, label: r.fid, type: 'text' };
-      return Object.assign({}, baseR, { group: r.section || baseR.group || 'Role Details', required: !!r.required, width: r.width || baseR.width || 'half', enabled: r.enabled !== false });
-    });
+    var updatedR = rows.map(function(r){ return { fid: r.fid, section: r.section, width: r.width, required: !!r.required, showIf: r.showIf }; });
     saveRoleFields(updatedR);
     return;
   }
@@ -8878,6 +8942,40 @@ function getPeople() {
 }
 
 // Find a person by profile ID, with fallback to matching by full/display name (legacy data)
+// ── COMPOSITE FIELDS ──────────────────────────────────────────────────────
+// A composite field assembles its value from a pattern like "{{PREFERRED NAME}} {{SURNAME}}".
+// Computes from live field values; editable (user can override).
+function computeComposite(pattern, valueGetter) {
+  if (!pattern) return '';
+  return pattern.replace(/\{\{([^}]+)\}\}/g, function(_, key) {
+    var v = valueGetter(key.trim());
+    return (v == null) ? '' : String(v);
+  }).replace(/\s+/g, ' ').replace(/^[\s,]+|[\s,]+$/g, '').trim();
+}
+
+// Compute a composite from a set of already-resolved values (uppercase-keyed map)
+function computeCompositeFromValues(pattern, values) {
+  return computeComposite(pattern, function(key){
+    return values[key.toUpperCase()] || values[key] || '';
+  });
+}
+
+// Recompute all composite fields in the currently-open case form
+function recomputeCompositeFields(journeyId) {
+  var fields = getCaseFormForJourney(journeyId);
+  var vals = {};
+  fields.forEach(function(f) {
+    var el = document.getElementById('cf_input_' + f.id);
+    if (el && el.value) vals[(f.label||'').toUpperCase().trim()] = el.value;
+  });
+  fields.forEach(function(f) {
+    if (f.type !== 'composite' || !f.pattern) return;
+    var el = document.getElementById('cf_input_' + f.id);
+    if (!el || el.dataset.overridden === '1') return;
+    el.value = computeCompositeFromValues(f.pattern, vals);
+  });
+}
+
 function getPersonById(idOrName) {
   if (!idOrName) return null;
   var people = getPeople();
@@ -8902,14 +9000,12 @@ function expandPersonReference(personIdOrName, prefix, expandFieldIds, values) {
   if (!person) return values;
   // Expand each configured attribute → {{PREFIX ATTRLABEL}}
   (expandFieldIds || []).forEach(function(fid) {
-    var def = pfDefs.find(function(f){ return f.id === fid; });
+    var def = pfDefs.find(function(f){ return f.id === fid || (f.aliasIds||[]).indexOf(fid) !== -1; });
     if (!def) return;
-    var v = person[fid];
+    var v = readEntityFieldValue(person, def);
     if (!v) return;
     if (def.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(v))) v = formatDateValue(v);
-    // Key: PREFIX + attribute label, e.g. "MANAGER" + "POSITION TITLE" → "MANAGER POSITION TITLE"
     values[PRE + ' ' + def.label.toUpperCase().trim()] = v;
-    // Also common short aliases
     if (/position|title/i.test(def.label)) values[PRE + ' TITLE'] = v;
     if (/email/i.test(def.label)) values[PRE + ' EMAIL'] = v;
     if (/mobile|phone/i.test(def.label)) values[PRE + ' PHONE'] = v;
@@ -8936,9 +9032,12 @@ var DEFAULT_PROFILE_FIELDS = [
 ];
 
 function getProfileFields() {
-  return (appSettings.profileFields && appSettings.profileFields.length) ? appSettings.profileFields : DEFAULT_PROFILE_FIELDS;
+  return resolveFormFields(appSettings.profileForm, DEFAULT_PROFILE_FIELDS);
 }
-function saveProfileFields(fields) { appSettings.profileFields = fields; saveSettings(); }
+function saveProfileFields(fields) {
+  appSettings.profileForm = fields.map(function(f){ return { fid: f.fid||f.id, section: f.section||f.group, width: f.width, required: f.required, showIf: f.showIf }; });
+  saveSettings();
+}
 
 var peopleSearchQ = '';
 var editingPersonId = null;
@@ -9030,6 +9129,7 @@ function renderProfileFieldInput(f, p) {
   if(f.type==='date') return label+'<input type="date" id="'+id+'" value="'+val+'">';
   if(f.type==='datetime') return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+(val.split(' ')[0]||'')+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
   if(f.type==='number') return label+'<input type="number" id="'+id+'" value="'+val.replace(/"/g,'&quot;')+'">';
+  if(f.type==='composite') return label+'<input id="'+id+'" data-composite="'+(f.pattern||'').replace(/"/g,'&quot;')+'" value="'+val.replace(/"/g,'&quot;')+'" placeholder="Auto-fills from other fields" style="background:#FFFBF5;"><div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
   if(f.type==='select'){var opts='<option value="">— Select —</option>'+(f.options||[]).map(function(o){return '<option value="'+o+'" '+(val===o?'selected':'')+'>'+o+'</option>';}).join('');
     var pIsDept = /\bdepartment\b|\bdept\b|\bteam\b/i.test(f.label||'');
     var pOnchg = pIsDept ? ' onchange="onDepartmentFieldChange(\''+f.id+'\',this.value)"' : '';
@@ -9807,17 +9907,9 @@ function generateFromCase(tplId, caseId) {
             return;
           }
 
-          // Library field — map by label
-          let def = lib.find(f => f.id === fid);
-          if (!def) {
-            const stripped = fid.replace(/^(?:cf|fl|pf)_/, '');
-            def = lib.find(f => f.id.replace(/^(?:cf|fl|pf)_/, '') === stripped);
-          }
-          if (!def) {
-            const labelGuess = fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
-            def = lib.find(f => f.label.toLowerCase() === labelGuess.toLowerCase());
-          }
-          const label = def ? def.label : fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
+          // Library field — resolve via getFieldByAnyId (handles fid, alias, label)
+          var def = getFieldByAnyId(fid);
+          var label = def ? def.label : String(fid).replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
           fieldValues[label.toUpperCase()] = formatted;
           fieldValues[label] = formatted;
         });
@@ -10107,19 +10199,10 @@ function openStepPackage(stepId, journeyId, stageId, caseId) {
           return;
         }
 
-        // Find the field definition — try all ID prefix variants then label-derived
-        let def = lib.find(f => f.id === fid);
-        if (!def) {
-          const stripped = fid.replace(/^(?:cf|fl|pf)_/, '');
-          def = lib.find(f => f.id.replace(/^(?:cf|fl|pf)_/, '') === stripped);
-        }
-        if (!def) {
-          const labelGuess = fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
-          def = lib.find(f => f.label.toLowerCase() === labelGuess.toLowerCase());
-        }
-
+        // Find the field definition via getFieldByAnyId (fid, alias, or label)
+        var def = getFieldByAnyId(fid);
         // Derive the canonical label
-        const label = def ? def.label : fid.replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
+        var label = def ? def.label : String(fid).replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
 
         // Store under EVERY possible key a template might use
         caseFields[label.toUpperCase()] = formatted;          // {{MANAGER NAME}}
@@ -11095,13 +11178,17 @@ function renderSettingsSection() {
   if (settingsSection === 'customFields') { settingsSection = 'caseFields'; }
   if (settingsSection === 'caseFields') {
     var lib = getFieldLib();
-    var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',location:'Location'};
+    var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',composite:'Composite (combined fields)',location:'Location',manager:'Manager/Person',person:'Person',award:'Award',classification:'Classification'};
     // Group fields
     var groups = [];
     lib.forEach(function(f){ var g=f.group||'General'; if(groups.indexOf(g)===-1) groups.push(g); });
     el.innerHTML = `
       <div class="settings-section-title">Fields</div>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.6;">One library for everything. Each field can be placed on case forms in the <a href="#" onclick="settingsSection='caseForms';renderSettings();return false;" style="color:var(--teal);">Form Builder</a> and inserted into templates as <code>{{FIELD LABEL}}</code> via the editor's <strong>Field</strong> button. When a case form is filled, its values automatically pre-fill matching placeholders in templates.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;line-height:1.6;">One library for everything. Each field can be placed on forms in the <a href="#" onclick="settingsSection='caseForms';renderSettings();return false;" style="color:var(--teal);">Form Builder</a> and inserted into templates as <code>{{FIELD LABEL}}</code>.</p>
+      <div style="display:flex;gap:8px;margin-bottom:16px;">
+        <button class="btn btn-sm" onclick="cleanupMalformedFields();renderSettingsSection();toast('Cleaned up malformed fields')" style="color:var(--text2);">🧹 Clean up junk fields</button>
+        <button class="btn btn-sm" onclick="if(confirm('Rebuild the entire field system from defaults? This removes duplicates and junk, and resets People/Candidate/Role forms to clean defaults. Your saved records (cases, people, candidates) are NOT affected.')){rebuildFieldSystem();}" style="color:var(--red);">⟳ Rebuild field system</button>
+      </div>
       ${groups.map(g => `
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin:14px 0 6px;">${g}</div>
         <div style="display:flex;flex-direction:column;gap:6px;">
@@ -11112,6 +11199,7 @@ function renderSettingsSection() {
                   <span style="font-size:13px;font-weight:600;color:var(--text);">${f.label}</span>
                   <span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;background:var(--teal-lt);color:var(--teal);">${typeLabels[f.type]||'Text'}</span>
                   <code style="font-size:10px;background:var(--bg);padding:1px 5px;border-radius:3px;color:var(--text3);">{{${f.label.toUpperCase()}}}</code>
+                  <code style="font-size:9px;background:var(--bg);padding:1px 5px;border-radius:3px;color:var(--text3);opacity:.6;" title="Permanent field code">${f.fid||''}</code>
                 </div>
                 ${f.placeholder?`<div style="font-size:11px;color:var(--text3);margin-top:2px;">${f.placeholder}</div>`:''}
                 ${(f.options||[]).length?`<div style="font-size:10.5px;color:var(--text3);margin-top:2px;">Options: ${f.options.join(', ')}</div>`:''}
@@ -11729,9 +11817,12 @@ function pfAddField() {
 
 // ── CANDIDATE FORM FIELD EDITOR ───────────────────────────────────────────
 function getCandidateFields() {
-  return (appSettings.candidateFields && appSettings.candidateFields.length) ? appSettings.candidateFields : JSON.parse(JSON.stringify(DEFAULT_CANDIDATE_FIELDS));
+  return resolveFormFields(appSettings.candidateForm, DEFAULT_CANDIDATE_FIELDS);
 }
-function saveCandidateFields(fields) { appSettings.candidateFields = fields; saveSettings(); }
+function saveCandidateFields(fields) {
+  appSettings.candidateForm = fields.map(function(f){ return { fid: f.fid||f.id, section: f.section||f.group, width: f.width, required: f.required, showIf: f.showIf }; });
+  saveSettings();
+}
 
 function cfEdit2(idx) {
   var fields = getCandidateFields();
@@ -11961,6 +12052,7 @@ function renderCandidateField(f, c) {
   if(f.type === 'date') return label + '<input type="date" id="' + id + '" value="' + val + '">';
   if(f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (val.split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (val.split(' ')[1]||'') + '" style="width:110px;"></div>';
   if(f.type === 'number') return label + '<input type="number" id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '">';
+  if(f.type === 'composite') return label + '<input id="' + id + '" data-composite="' + (f.pattern||'').replace(/"/g,'&quot;') + '" value="' + val.replace(/"/g,'&quot;') + '" placeholder="Auto-fills from other fields" style="background:#FFFBF5;"><div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
 
   // Auto-detect date/datetime from field label
   var candNorm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
@@ -13358,6 +13450,9 @@ function renderColourMiniPreview() {
     }
   }
 })();
+window.addEventListener('error', function(ev) {
+  if (ev.error && ev.error.stack) console.error('GLOBAL ERROR:', ev.error.message, '\nSTACK:', ev.error.stack);
+});
 renderSidebar();
 // Show template count on load briefly
 setTimeout(() => {
