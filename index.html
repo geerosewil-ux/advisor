@@ -4137,7 +4137,7 @@ function autoCreateFieldsFromTemplate(tpl) {
   var existingLabels = {};
   lib.forEach(function(f){ existingLabels[(f.label||'').toUpperCase().trim()] = true; });
   // Reserved reference sub-attribute prefixes and pronoun tags — never auto-create these
-  var reserved = /^(PRONOUN\/|LOCATION |AWARD$|CLASSIFICATION$|LEVEL$|LOCATION$|OFFICE LOCATION$|WORK LOCATION$|ORGANISATION|ER ADVISER|ADVISER |YOUR TITLE|ER EMAIL)/i;
+  var reserved = /^(PRONOUN\/|PRONOUN$|LOCATION\b|OFFICE LOCATION$|WORK LOCATION$|AWARD\b|CLASSIFICATION$|LEVEL$|MANAGER\b|ORGANISATION|ORGANIZATION|ER ADVISER|ADVISER |YOUR TITLE|ER EMAIL|ER CONTACT|ORG ADDRESS)/i;
   var created = 0;
   placeholders.forEach(function(ph) {
     var key = ph.toUpperCase().trim();
@@ -4637,6 +4637,37 @@ function getRoleFields() {
   return (appSettings.roleFields && appSettings.roleFields.length) ? appSettings.roleFields : JSON.parse(JSON.stringify(DEFAULT_ROLE_FIELDS));
 }
 function saveRoleFields(fields) { appSettings.roleFields = fields; saveSettings(); }
+
+// Clean up malformed auto-created fields (reference sub-attributes that became standalone fields,
+// and fields whose label is just their raw ID). Run once on load.
+function cleanupMalformedFields() {
+  var reserved = /^(PRONOUN|LOCATION\b|OFFICE LOCATION|WORK LOCATION|AWARD\b|CLASSIFICATION|LEVEL$|MANAGER\b|ORGANISATION|ORGANIZATION|ER ADVISER|ADVISER|YOUR TITLE|ER EMAIL|ER CONTACT|ORG ADDRESS)/i;
+  var changed = false;
+  var cleanArray = function(arr) {
+    if (!Array.isArray(arr)) return arr;
+    return arr.filter(function(f) {
+      if (!f || !f.label) return true;
+      var lbl = f.label.toUpperCase().trim();
+      // Remove reference sub-attributes that shouldn't be standalone fields
+      // e.g. "MANAGER TITLE", "AWARD CLASSIFICATION", "LOCATION PARKING"
+      if (/^(MANAGER|LOCATION|AWARD|OFFICE LOCATION|WORK LOCATION)\s+\S+/i.test(lbl)) { changed = true; return false; }
+      // Remove fields whose label is just an fl_/rf_/cf_ style raw ID
+      if (/^(FL|RF|CF|CAND|PF)[_ ]/i.test(f.label)) { changed = true; return false; }
+      return true;
+    }).map(function(f) {
+      // Fix labels that are raw IDs → title case
+      if (f.label && /^(fl|rf|cf|cand|pf)_/i.test(f.label)) {
+        f.label = f.label.replace(/^(fl|rf|cf|cand|pf)_/i,'').replace(/_/g,' ').replace(/\w\S*/g, function(w){ return w.charAt(0).toUpperCase()+w.slice(1).toLowerCase(); });
+        changed = true;
+      }
+      return f;
+    });
+  };
+  ['fieldLib','roleFields','candidateFields','profileFields','customFields','caseFieldLib'].forEach(function(k){
+    if (appSettings[k]) appSettings[k] = cleanArray(appSettings[k]);
+  });
+  if (changed) saveSettings();
+}
 
 // ── CANONICAL FIELD SYSTEM ───────────────────────────────────────────────
 // Each canonical field has a name (the source of truth) and a list of
@@ -10681,6 +10712,8 @@ function saveSettings(s) {
 
 var appSettings = loadSettings();
 var settingsSection = 'org';
+// Clean up any malformed auto-created fields from earlier builds
+try { cleanupMalformedFields(); } catch(e) { console.warn('cleanup error:', e); }
 
 // ── DEPENDENT DROPDOWN HANDLERS ───────────────────────────────────────────
 // When an Award is selected, filter the Classification dropdown(s) in the same form
