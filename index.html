@@ -1018,24 +1018,6 @@ nav{height:54px;background:var(--slate);display:flex;align-items:center;padding:
               <option value="h3">Heading 3</option>
             </select>
             <div class="be-tb-sep"></div>
-            <select class="be-tb-select" id="beFontFamily" onchange="beApplyFont(this.value)" style="width:90px;">
-              <option value="Inter">Inter</option>
-              <option value="Aptos">Aptos</option>
-              <option value="Georgia">Georgia</option>
-              <option value="DM Serif">DM Serif</option>
-              <option value="Courier New">Courier New</option>
-            </select>
-            <div style="display:flex;align-items:center;gap:3px;margin-left:2px;">
-              <button class="be-tb-btn" style="padding:2px 3px;" onclick="beChangeSizeBy(-1)" title="Decrease size">−</button>
-              <div style="display:flex;align-items:center;gap:2px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:0 5px;height:24px;">
-                <input class="be-tb-num" id="beFontSize" type="number" value="10" min="6" max="72"
-                  title="Font size (pt)" onchange="beApplySize(this.value)"
-                  style="width:30px;border:none;background:transparent;text-align:center;font-size:12px;font-weight:600;color:var(--text);">
-                <span style="font-size:10px;color:var(--text3);">pt</span>
-              </div>
-              <button class="be-tb-btn" style="padding:2px 3px;" onclick="beChangeSizeBy(1)" title="Increase size">+</button>
-            </div>
-            <div class="be-tb-sep"></div>
             <button class="be-tb-btn" onclick="beFmt('bold')" title="Bold (Cmd+B)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:14px;height:14px;"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/></svg></button>
             <button class="be-tb-btn" onclick="beFmt('italic')" title="Italic (Cmd+I)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:14px;height:14px;"><line x1="19" y1="4" x2="10" y2="4"/><line x1="14" y1="20" x2="5" y2="20"/><line x1="15" y1="4" x2="9" y2="20"/></svg></button>
             <button class="be-tb-btn" onclick="beFmt('underline')" title="Underline (Cmd+U)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:14px;height:14px;"><path d="M6 3v7a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg></button>
@@ -3223,35 +3205,16 @@ function outlookBody(item, forSend) {
 
 
   if (fmt === 'email') {
-    const toVal = (item.to && item.to.trim())
-      ? item.to.replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k.trim()] || fieldValues[k.trim().toUpperCase()] || ('{{'+k+'}}'))
-      : (fieldValues['EMPLOYEE NAME'] || fieldValues['Employee Name'] || '{{EMPLOYEE NAME}}');
-    const fromVal = appSettings.orgName || '';
     return `
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F5F7">
 <tr><td align="center" style="padding:20px 10px;">
-<table width="660" cellpadding="0" cellspacing="0" border="0" style="font-family:${ff};background:#FFFFFF;">
+<table width="760" cellpadding="0" cellspacing="0" border="0" style="font-family:${ff};background:#FFFFFF;">
 
   <!-- TOP ACCENT BAR -->
   <tr><td height="3" style="background:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
 
-  <!-- ORG + DATE ROW -->
-  <tr><td style="padding:14px 28px 10px;border-bottom:1px solid #F0F0F0;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td><p style="margin:0;font-family:${ff};font-size:13px;font-weight:700;color:#6B7280;letter-spacing:.06em;text-transform:uppercase;">${fromVal||'Employment Relations'}</p></td>
-      <td align="right"><p style="margin:0;font-family:${ff};font-size:13px;color:#9CA3AF;">${nowDate}</p></td>
-    </tr></table>
-  </td></tr>
-
-  ${forSend ? '' : `<!-- RE LINE — preview only, not in sent email -->
-  <tr><td style="padding:8px 28px 10px;border-bottom:1px solid #F5F5F5;">
-    ${toVal ? `<p style="margin:0 0 2px;font-family:${ff};font-size:13px;color:#6B7280;">To: <span style="color:#111827;font-weight:500;">${toVal}</span></p>` : ''}
-    <p style="margin:0;font-family:${ff};font-size:${fs};color:#4A5568;">Re: <strong style="color:#0F1724;">${subj||item.name}</strong>
-    <span style="margin-left:12px;font-size:13px;color:#9CA3AF;font-weight:400;">Private &amp; Confidential</span></p>
-  </td></tr>`}
-
   <!-- BODY -->
-  <tr><td style="background:#FFFFFF;padding:22px 28px 20px;">${bodyParas}</td></tr>
+  <tr><td style="background:#FFFFFF;padding:26px 36px 22px;">${bodyParas}</td></tr>
 
   ${kbSection}
 
@@ -3274,13 +3237,13 @@ function outlookBody(item, forSend) {
     return `
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F5F7">
 <tr><td align="center" style="padding:24px 10px;">
-<table width="620" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;font-family:${T.fontFamily};">
+<table width="720" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;font-family:${T.fontFamily};">
 
   <!-- TOP ACCENT RULE -->
   <tr><td height="4" style="background:${C.accentLine};font-size:0;line-height:0;">&nbsp;</td></tr>
 
   <!-- LETTERHEAD: org name + date -->
-  <tr><td style="padding:28px 48px 20px;border-bottom:1px solid #F0F0F0;">
+  <tr><td style="padding:28px 40px 20px;border-bottom:1px solid #F0F0F0;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td>
         <p style="margin:0;font-family:${T.fontFamily};font-size:${fs};font-weight:700;color:${C.accentLine};letter-spacing:.02em;">${orgName}</p>
@@ -3293,7 +3256,7 @@ function outlookBody(item, forSend) {
   </td></tr>
 
   <!-- ADDRESS BLOCK -->
-  <tr><td style="padding:24px 48px 0;">
+  <tr><td style="padding:24px 40px 0;">
     <table cellpadding="0" cellspacing="0" border="0">
       ${recipientTitle || recipientName ? `<tr><td style="font-family:${T.fontFamily};font-size:${T.fontSize}px;color:${T.bodyColor};line-height:1.6;padding-bottom:2px;">${[recipientTitle, recipientName].filter(Boolean).join(' ')}</td></tr>` : ''}
       ${recipientOrg ? `<tr><td style="font-family:${T.fontFamily};font-size:${T.fontSize}px;color:${T.bodyColor};line-height:1.6;">${recipientOrg}</td></tr>` : ''}
@@ -3302,17 +3265,17 @@ function outlookBody(item, forSend) {
   </td></tr>
 
   <!-- RE LINE -->
-  <tr><td style="padding:20px 48px 0;">
+  <tr><td style="padding:20px 40px 0;">
     <p style="margin:0;font-family:${T.fontFamily};font-size:${T.fontSize}px;color:${T.bodyColor};line-height:${T.lineHeight};"><strong>Re: ${subj || item.name}</strong></p>
   </td></tr>
 
   <!-- BODY -->
-  <tr><td style="padding:16px 48px 32px;">
+  <tr><td style="padding:16px 40px 32px;">
     ${bodyParas}
   </td></tr>
 
   <!-- SIGN-OFF -->
-  ${adviserName ? `<tr><td style="padding:0 48px 32px;">
+  ${adviserName ? `<tr><td style="padding:0 40px 32px;">
     <p style="margin:0 0 40px;font-family:${T.fontFamily};font-size:${T.fontSize}px;color:${T.bodyColor};">Yours sincerely,</p>
     <p style="margin:0;font-family:${T.fontFamily};font-size:${T.fontSize}px;font-weight:600;color:${T.bodyColor};">${adviserName}</p>
     ${adviserTitle ? `<p style="margin:2px 0 0;font-family:${T.fontFamily};font-size:13px;color:#6B7280;">${adviserTitle}</p>` : ''}
@@ -4573,11 +4536,11 @@ function toggleInternalPanel(tplId) {
   if (btn) btn.style.background = open ? 'var(--teal-lt)' : '';
 }
 function getTypography() {
-  // Template output standard: Aptos 10pt — the ONLY option, fully consistent everywhere.
+  // Template output standard: Aptos 11pt — the ONLY option, fully consistent everywhere.
   return {
     fontFamily:   'Aptos,sans-serif',
-    fontSize:     '13',        // 10pt ≈ 13px (10 × 1.333)
-    fontPt:       '10',
+    fontSize:     '15',        // 11pt ≈ 15px (11 × 1.333)
+    fontPt:       '11',
     lineHeight:   '1.55',
     bodyColor:    '#1A1A1A',
     headingColor: '#1A6B6B',
@@ -11658,24 +11621,16 @@ function renderSettingsSection() {
       <!-- Typography -->
       <div style="margin-bottom:28px;">
         <div class="settings-section-title" style="font-size:13px;margin-bottom:4px;">Document Typography</div>
-        <p style="font-size:12.5px;color:var(--text2);margin-bottom:14px;line-height:1.6;">Sets the default font, size and spacing for all templates. Overrides this by changing individual blocks in the template editor.</p>
+        <p style="font-size:12.5px;color:var(--text2);margin-bottom:14px;line-height:1.6;">All template output uses <strong>Aptos 11pt</strong> for full consistency. You can adjust line spacing and colours below.</p>
         <div class="form-row" style="gap:12px;margin-bottom:10px;">
           <div class="form-field" style="flex:2;margin:0;">
-            <label>Font family</label>
-            <select onchange="appSettings.typography=appSettings.typography||{};appSettings.typography.fontFamily=this.value;saveSettings();applyGlobalTypography()">
-              ${fontFamilies.map(f=>`<option value="${f}" ${(typo.fontFamily||'Aptos')===f?'selected':''}>${f}</option>`).join('')}
-            </select>
-          </div>
-          <div class="form-field" style="flex:1;margin:0;">
-            <label>Body size (pt)</label>
-            <select onchange="appSettings.typography=appSettings.typography||{};appSettings.typography.fontSize=this.value;saveSettings();applyGlobalTypography()">
-              ${fontSizes.map(f=>`<option value="${f}" ${(typo.fontSize||'10')===f?'selected':''}>${f}pt</option>`).join('')}
-            </select>
+            <label>Font</label>
+            <input value="Aptos · 11pt (fixed)" disabled style="background:var(--bg);color:var(--text3);cursor:not-allowed;">
           </div>
           <div class="form-field" style="flex:1;margin:0;">
             <label>Line spacing</label>
             <select onchange="appSettings.typography=appSettings.typography||{};appSettings.typography.lineHeight=this.value;saveSettings();applyGlobalTypography()">
-              ${lineHeights.map(l=>`<option value="${l.v}" ${(typo.lineHeight||'1.75')===l.v?'selected':''}>${l.l}</option>`).join('')}
+              ${lineHeights.map(l=>`<option value="${l.v}" ${(typo.lineHeight||'1.55')===l.v?'selected':''}>${l.l}</option>`).join('')}
             </select>
           </div>
         </div>
