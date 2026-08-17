@@ -3487,25 +3487,31 @@ function downloadOft(id) {
   const bodyHtml = outlookBody(item, true); // forSend=true strips preview chrome (To/Re)
   const bodyText = document.getElementById('outputPreview')?.innerText || getRawText(item.body||'');
 
-  // Collect attachments from enabled attachment blocks
-  // Try live beBlocks first (editor open), fall back to saved item.blocks
+  // Resolve the "To" recipient — from the template's To field, filled with current values
+  let toAddr = '';
+  if (item.to && item.to.trim()) {
+    toAddr = item.to.replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k.trim()] || fieldValues[k.trim().toUpperCase()] || '');
+  }
+  if (!toAddr) toAddr = fieldValues['EMAIL'] || fieldValues['EMPLOYEE EMAIL'] || '';
+
   const blocks = (beBlocks && beBlocks.length) ? beBlocks : (item.blocks || []);
   const allAtts = blocks
     .filter(b => b.type === 'attachments' && b.enabled !== false)
     .flatMap(b => (b.attachments || []).filter(a => a.dataUrl));
 
-  buildAndDownloadEml(item.name, subject, bodyText, bodyHtml, allAtts);
+  buildAndDownloadEml(item.name, subject, bodyText, bodyHtml, allAtts, toAddr);
 }
 
-function buildAndDownloadEml(name, subject, bodyText, bodyHtml, attachments) {
+function buildAndDownloadEml(name, subject, bodyText, bodyHtml, attachments, toAddr) {
   const boundary = '----=_ERAdviser_' + Date.now();
   const altBoundary = '----=_ERAdviserAlt_' + Date.now();
 
   const lines = [
     'MIME-Version: 1.0',
-    `Subject: ${subject}`,
-    'X-Unsent: 1',
   ];
+  if (toAddr && toAddr.trim()) lines.push(`To: ${toAddr.trim()}`);
+  lines.push(`Subject: ${subject}`);
+  lines.push('X-Unsent: 1');
 
   if (attachments.length > 0) {
     lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
@@ -5233,24 +5239,33 @@ function exportToExcel() {
   var candSheet = XLSX.utils.json_to_sheet(candRows.length ? candRows : [{}]);
   XLSX.utils.book_append_sheet(wb, candSheet, 'Candidates');
 
-  // ── Sheet: Custom Journeys + Steps (JSON blobs for lossless round-trip) ─
-  var journeyBlob = [
-    { Key: 'er_custom_journeys', Value: localStorage.getItem('er_custom_journeys') || '[]' },
-    { Key: 'er_journey_steps',   Value: localStorage.getItem('er_journey_steps') || '{}' },
-    { Key: 'er_pipeline',        Value: localStorage.getItem('er_pipeline') || '[]' },
-    { Key: 'er_candidates',      Value: localStorage.getItem('er_candidates') || '{}' },
-    { Key: 'er_people',          Value: localStorage.getItem('er_people') || '[]' },
-    { Key: 'er_cases',           Value: localStorage.getItem('er_cases') || '[]' },
-  ];
-  var journeySheet = XLSX.utils.json_to_sheet(journeyBlob);
-  journeySheet['!cols'] = [{wch:24},{wch:120}];
+  // ── Sheet: Data stores (JSON blobs for lossless round-trip) ─────────────
+  // Helper: split a large string into multiple {Key, Value} rows (Excel cell limit is 32767)
+  var CHUNK = 30000;
+  var blobToRows = function(key, str) {
+    str = str || '';
+    if (str.length <= CHUNK) return [{ Key: key, Value: str }];
+    var out = [];
+    for (var i = 0, part = 0; i < str.length; i += CHUNK, part++) {
+      out.push({ Key: key + '#part' + part, Value: str.substring(i, i + CHUNK) });
+    }
+    return out;
+  };
+
+  var dsRows = [];
+  ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases'].forEach(function(k) {
+    var def = (k === 'er_journey_steps' || k === 'er_candidates') ? '{}' : '[]';
+    blobToRows(k, localStorage.getItem(k) || def).forEach(function(r){ dsRows.push(r); });
+  });
+  var journeySheet = XLSX.utils.json_to_sheet(dsRows);
+  journeySheet['!cols'] = [{wch:28},{wch:120}];
   XLSX.utils.book_append_sheet(wb, journeySheet, 'DataStores');
 
-  // ── Sheet 9: Full Settings (JSON blob for lossless round-trip) ──────────
-  var settingsBlob = JSON.stringify(appSettings, null, 2);
-  var blobRows = [{ Key: '_appSettings_json', Value: settingsBlob }];
+  // ── Sheet 9: Full Settings (JSON blob, chunked) ─────────────────────────
+  var settingsBlob = JSON.stringify(appSettings);
+  var blobRows = blobToRows('_appSettings_json', settingsBlob);
   var blobSheet = XLSX.utils.json_to_sheet(blobRows);
-  blobSheet['!cols'] = [{wch:24},{wch:120}];
+  blobSheet['!cols'] = [{wch:28},{wch:120}];
   XLSX.utils.book_append_sheet(wb, blobSheet, 'AppSettings');
 
   // ── Sheet 5 (existing): Settings snapshot ──────────────────────────────
@@ -5434,29 +5449,37 @@ function importFromExcel(file) {
         saveCases(existingCases);
       }
 
-      // ── AppSettings blob (full lossless restore) ───────────────────────
+      // Helper: reassemble chunked blob rows (key or key#part0, key#part1, …)
+      var reassembleBlob = function(rows, baseKey) {
+        var exact = rows.find(function(r){ return r.Key === baseKey; });
+        if (exact) return exact.Value;
+        var parts = rows.filter(function(r){ return String(r.Key).indexOf(baseKey + '#part') === 0; })
+          .sort(function(a,b){ return parseInt(a.Key.split('#part')[1]) - parseInt(b.Key.split('#part')[1]); });
+        if (!parts.length) return null;
+        return parts.map(function(r){ return r.Value; }).join('');
+      };
+
+      // ── AppSettings blob (full lossless restore, chunk-aware) ──────────
       if (wb.SheetNames.includes('AppSettings')) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets['AppSettings'], { defval:'' });
-        const blobRow = rows.find(r => r.Key === '_appSettings_json');
-        if (blobRow && blobRow.Value) {
+        const blobStr = reassembleBlob(rows, '_appSettings_json');
+        if (blobStr) {
           try {
-            const restored = JSON.parse(blobRow.Value);
-            // Lossless: restore every settings key (field system, forms, awards, stages, etc.)
+            const restored = JSON.parse(blobStr);
             Object.keys(restored).forEach(function(k) { appSettings[k] = restored[k]; });
             saveSettings();
           } catch(e) { console.warn('AppSettings restore failed:', e); }
         }
       }
 
-      // ── DataStores blob (People, Candidates, Pipeline, Journeys, Cases) ─
+      // ── DataStores blobs (chunk-aware) ────────────────────────────────
       if (wb.SheetNames.includes('DataStores')) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets['DataStores'], { defval:'' });
-        rows.forEach(function(r) {
-          if (r.Key && r.Value && String(r.Key).startsWith('er_')) {
-            try {
-              JSON.parse(r.Value); // validate it's JSON
-              localStorage.setItem(r.Key, r.Value);
-            } catch(e) { console.warn('DataStore restore failed for', r.Key, e); }
+        ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases'].forEach(function(k) {
+          var val = reassembleBlob(rows, k);
+          if (val) {
+            try { JSON.parse(val); localStorage.setItem(k, val); }
+            catch(e) { console.warn('DataStore restore failed for', k, e); }
           }
         });
       }
@@ -12061,9 +12084,15 @@ function runBulkEmail(roleId) {
     var bodyHtml = outlookBody(tpl, true);
     var bodyText = bodyHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     var cName = getEntityDisplayName(c, getCandidateFields()) || 'candidate';
+    // Resolve the candidate's email for the To header (template To field, else their email field)
+    var cTo = '';
+    if (tpl.to && tpl.to.trim()) {
+      cTo = tpl.to.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+    }
+    if (!cTo) cTo = fieldValues['EMAIL'] || fieldValues['CANDIDATE EMAIL'] || c.cand_email || '';
     // Stagger downloads slightly so the browser doesn't block them
     setTimeout(function(){
-      buildAndDownloadEml(cName + ' - ' + tpl.name, subj, bodyText, bodyHtml, []);
+      buildAndDownloadEml(cName + ' - ' + tpl.name, subj, bodyText, bodyHtml, [], cTo);
     }, idx * 400);
     fieldValues = savedFieldValues;
     count++;
