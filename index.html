@@ -5164,11 +5164,13 @@ function exportToExcel() {
   // ── Sheet 6: Fields library ─────────────────────────────────────────────
   var fieldLib = getFieldLib();
   var fieldRows = fieldLib.map(function(f) {
-    return { ID: f.id, Label: f.label, Group: f.group||'General', Type: f.type||'text',
-      Placeholder: f.placeholder||'', Options: (f.options||[]).join(' | '), Width: f.width||'half' };
+    return { ID: f.fid, Label: f.label, Group: f.group||'General', Type: f.type||'text',
+      Placeholder: f.placeholder||'', Options: (f.options||[]).join(' | '), Width: f.width||'half',
+      Pattern: f.pattern||'', RefPrefix: f.refPrefix||'', RefExpand: (f.refExpand||[]).join(' | '),
+      AliasIDs: (f.aliasIds||[]).join(' | ') };
   });
   var fieldSheet = XLSX.utils.json_to_sheet(fieldRows.length ? fieldRows : [{}]);
-  fieldSheet['!cols'] = [{wch:24},{wch:30},{wch:16},{wch:14},{wch:30},{wch:50},{wch:8}];
+  fieldSheet['!cols'] = [{wch:24},{wch:30},{wch:16},{wch:14},{wch:30},{wch:50},{wch:8},{wch:30},{wch:14},{wch:30},{wch:30}];
   XLSX.utils.book_append_sheet(wb, fieldSheet, 'Fields');
 
   // ── Sheet 7: Form Builder (per-journey field compositions) ──────────────
@@ -5192,6 +5194,55 @@ function exportToExcel() {
   var qbSheet = XLSX.utils.json_to_sheet(qbRows.length ? qbRows : [{}]);
   qbSheet['!cols'] = [{wch:20},{wch:30},{wch:10},{wch:80}];
   XLSX.utils.book_append_sheet(wb, qbSheet, 'QuickBlocks');
+
+  // ── Sheet: People profiles ──────────────────────────────────────────────
+  var people = getPeople();
+  var pfDefs = getProfileFields();
+  var peopleRows = people.map(function(p) {
+    var row = { ID: p.id, 'Display Name': getEntityDisplayName(p, pfDefs) };
+    pfDefs.forEach(function(f){ row[f.label] = readEntityFieldValue(p, f) || ''; });
+    return row;
+  });
+  var peopleSheet = XLSX.utils.json_to_sheet(peopleRows.length ? peopleRows : [{}]);
+  XLSX.utils.book_append_sheet(wb, peopleSheet, 'People');
+
+  // ── Sheet: Recruitment Pipeline (roles) ─────────────────────────────────
+  var pipeline = (typeof loadPipeline === 'function') ? loadPipeline() : [];
+  var pipelineRows = pipeline.map(function(it) {
+    return { ID: it.id, Position: it.position||'', Department: it.dept||'', Location: it.location||'',
+      Manager: it.manager||'', Award: it.award||'', Classification: it.classification||'',
+      'Employment Type': it.empType||'', 'Start Date': it.startDate||'', Stage: it.stage||'',
+      Created: it.created||'' };
+  });
+  var pipelineSheet = XLSX.utils.json_to_sheet(pipelineRows.length ? pipelineRows : [{}]);
+  XLSX.utils.book_append_sheet(wb, pipelineSheet, 'Pipeline');
+
+  // ── Sheet: Candidates (all, across roles, with stage) ───────────────────
+  var candDefs = getCandidateFields();
+  var allCandsByRole = getCandidates(); // returns the full map
+  var candRows = [];
+  Object.keys(allCandsByRole||{}).forEach(function(roleId) {
+    (allCandsByRole[roleId]||[]).forEach(function(c) {
+      var row = { ID: c.id, RoleID: roleId, 'Display Name': getEntityDisplayName(c, candDefs), Stage: c.cand_stage||'' };
+      candDefs.forEach(function(f){ if(f.id!=='cand_stage') row[f.label] = readEntityFieldValue(c, f) || ''; });
+      candRows.push(row);
+    });
+  });
+  var candSheet = XLSX.utils.json_to_sheet(candRows.length ? candRows : [{}]);
+  XLSX.utils.book_append_sheet(wb, candSheet, 'Candidates');
+
+  // ── Sheet: Custom Journeys + Steps (JSON blobs for lossless round-trip) ─
+  var journeyBlob = [
+    { Key: 'er_custom_journeys', Value: localStorage.getItem('er_custom_journeys') || '[]' },
+    { Key: 'er_journey_steps',   Value: localStorage.getItem('er_journey_steps') || '{}' },
+    { Key: 'er_pipeline',        Value: localStorage.getItem('er_pipeline') || '[]' },
+    { Key: 'er_candidates',      Value: localStorage.getItem('er_candidates') || '{}' },
+    { Key: 'er_people',          Value: localStorage.getItem('er_people') || '[]' },
+    { Key: 'er_cases',           Value: localStorage.getItem('er_cases') || '[]' },
+  ];
+  var journeySheet = XLSX.utils.json_to_sheet(journeyBlob);
+  journeySheet['!cols'] = [{wch:24},{wch:120}];
+  XLSX.utils.book_append_sheet(wb, journeySheet, 'DataStores');
 
   // ── Sheet 9: Full Settings (JSON blob for lossless round-trip) ──────────
   var settingsBlob = JSON.stringify(appSettings, null, 2);
@@ -5384,32 +5435,46 @@ function importFromExcel(file) {
         if (blobRow && blobRow.Value) {
           try {
             const restored = JSON.parse(blobRow.Value);
-            // Merge — don't overwrite core data keys, only settings
-            const safeKeys = ['orgName','orgABN','industry','jurisdiction','empTypes','locations',
-              'fieldLib','caseFormsByJourney','dateFormat','dateTimeFormat','docColours',
-              'customFields','caseFieldLib','caseFormBase','caseFormByType','adviser'];
-            safeKeys.forEach(function(k) { if (restored[k] !== undefined) appSettings[k] = restored[k]; });
+            // Lossless: restore every settings key (field system, forms, awards, stages, etc.)
+            Object.keys(restored).forEach(function(k) { appSettings[k] = restored[k]; });
             saveSettings();
           } catch(e) { console.warn('AppSettings restore failed:', e); }
         }
       }
 
-      // ── Fields library (row-by-row, non-destructive) ───────────────────
-      if (wb.SheetNames.includes('Fields')) {
+      // ── DataStores blob (People, Candidates, Pipeline, Journeys, Cases) ─
+      if (wb.SheetNames.includes('DataStores')) {
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets['DataStores'], { defval:'' });
+        rows.forEach(function(r) {
+          if (r.Key && r.Value && String(r.Key).startsWith('er_')) {
+            try {
+              JSON.parse(r.Value); // validate it's JSON
+              localStorage.setItem(r.Key, r.Value);
+            } catch(e) { console.warn('DataStore restore failed for', r.Key, e); }
+          }
+        });
+      }
+
+      // ── Fields library (row-by-row) — SKIP if AppSettings blob already restored it ──
+      // The AppSettings blob is the authoritative source for the single-record field
+      // system (fieldLibV2 with permanent fids + aliasIds). Only use the row-by-row
+      // Fields sheet as a fallback when no blob was present.
+      var blobRestoredFields = wb.SheetNames.includes('AppSettings') && appSettings.fieldLibV2 && appSettings.fieldLibV2.length;
+      if (wb.SheetNames.includes('Fields') && !blobRestoredFields) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets['Fields'], { defval:'' });
         const lib = getFieldLib();
         rows.forEach(function(r) {
           if (!r.Label) return;
-          const existing = lib.findIndex(function(f){ return f.id === r.ID || f.label.toLowerCase() === r.Label.toLowerCase(); });
-          const f = { id: r.ID||lib.length.toString(), label: r.Label, group: r.Group||'General', type: r.Type||'text',
-            placeholder: r.Placeholder||'', options: r.Options ? r.Options.split(' | ').filter(Boolean) : [], width: r.Width||'half' };
+          const existing = lib.findIndex(function(f){ return f.fid === r.ID || f.label.toLowerCase() === r.Label.toLowerCase(); });
+          const f = { fid: r.ID || genFid(), label: r.Label, group: r.Group||'General', type: r.Type||'text',
+            placeholder: r.Placeholder||'', options: r.Options ? r.Options.split(' | ').filter(Boolean) : [], width: r.Width||'half', aliasIds: [] };
           if (existing >= 0) lib[existing] = f; else lib.push(f);
         });
         saveFieldLib(lib);
       }
 
-      // ── Form Builder ──────────────────────────────────────────────────
-      if (wb.SheetNames.includes('FormBuilder')) {
+      // ── Form Builder — SKIP if blob already restored ──
+      if (wb.SheetNames.includes('FormBuilder') && !blobRestoredFields) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets['FormBuilder'], { defval:'' });
         const byJourney = {};
         rows.forEach(function(r) {
@@ -5435,10 +5500,13 @@ function importFromExcel(file) {
         saveQuickBlocks(qbs);
       }
 
-      // Refresh UI
+      // Refresh UI — reload all in-memory data from restored localStorage
+      if (typeof cleanupMalformedFields === 'function') { try { cleanupMalformedFields(); } catch(e){} }
       renderSidebar();
       showEmpty();
-      toast(`Imported — ${imported.templates} templates, ${imported.library} library, ${imported.legislation} legislation, ${imported.cases} cases + settings, fields & forms`);
+      if (typeof renderPeople === 'function' && currentTab === 'people') renderPeople();
+      if (typeof renderRecruitment === 'function' && currentTab === 'recruitment') renderRecruitment();
+      toast(`Imported — ${imported.templates} templates, ${imported.library} library items, ${imported.legislation} legislation, ${imported.cases} cases, plus People, Candidates, Pipeline & full settings`);
     } catch(err) {
       console.error(err);
       alert('Import failed: ' + err.message);
@@ -6963,8 +7031,9 @@ function openLoadFromPeople() {
     + 'oninput="var q=this.value.toLowerCase();document.querySelectorAll(\'.pp-item\').forEach(function(el){el.style.display=(el.dataset.search.includes(q)?\'flex\':\'none\');})"></div>'
     + '<div style="flex:1;overflow-y:auto;padding:8px;">'
     + (people.length ? people.map(function(p) {
-        var initials = (p.pf_fullname||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
-        var search = [(p.pf_fullname||''), (p.pf_position||''), (p.pf_department||'')].join(' ').toLowerCase();
+        var dispName = getEntityDisplayName(p, getProfileFields()) || '—';
+        var initials = (dispName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
+        var search = [dispName, (p.pf_position||''), (p.pf_department||'')].join(' ').toLowerCase();
         return '<div class="pp-item" data-id="' + p.id + '" data-search="' + search + '" '
           + 'style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:6px;" '
           + 'onmouseover="this.style.borderColor=\'var(--teal)\';this.style.background=\'var(--teal-lt)\'" '
@@ -6972,7 +7041,7 @@ function openLoadFromPeople() {
           + 'onclick="loadPersonIntoForm(\'' + p.id + '\')">'
           + '<div style="width:36px;height:36px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;">' + initials + '</div>'
           + '<div style="min-width:0;">'
-          + '<div style="font-size:13px;font-weight:600;color:var(--text);">' + (p.pf_fullname||'—') + '</div>'
+          + '<div style="font-size:13px;font-weight:600;color:var(--text);">' + dispName + '</div>'
           + '<div style="font-size:11.5px;color:var(--text3);">' + (p.pf_position||'') + (p.pf_department?' · '+p.pf_department:'') + '</div>'
           + '</div></div>';
       }).join('')
@@ -9036,12 +9105,13 @@ function renderPeople() {
       </div></div>
     ${filtered.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">
       ${filtered.map(function(p){
-        var pCases = cases.filter(function(c){return c.personId===p.id||(c.employee||'').toLowerCase()===(p.pf_fullname||'').toLowerCase();});
-        var initials=(p.pf_fullname||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
+        var dispName = getEntityDisplayName(p, getProfileFields()) || '—';
+        var pCases = cases.filter(function(c){return c.personId===p.id||(c.employee||'').toLowerCase()===dispName.toLowerCase();});
+        var initials=(dispName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
         return `<div style="background:white;border:1px solid var(--border);border-radius:var(--r-lg);padding:16px 18px;cursor:pointer;transition:box-shadow .15s;" onclick="openPersonModal('${p.id}')" onmouseover="this.style.boxShadow='var(--shadow-lg)'" onmouseout="this.style.boxShadow='none'">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
             <div style="width:40px;height:40px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;">${initials}</div>
-            <div style="min-width:0;"><div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.pf_fullname||'—'}</div>
+            <div style="min-width:0;"><div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dispName}</div>
             <div style="font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.pf_position||''}${p.pf_department?' · '+p.pf_department:''}</div></div>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11.5px;">
@@ -11038,6 +11108,7 @@ function renderSettings() {
     { id:'org',             label:'Organisation' },
     { id:'locations',       label:'Office Locations' },
     { id:'awards',          label:'Awards & Classifications' },
+    { id:'candStages',      label:'Candidate Stages' },
     { id:'adviser',         label:'ER Adviser / Signatory' },
     { id:'appearance',      label:'Appearance' },
     { id:'tplDefaults',     label:'Template Defaults' },
@@ -11549,6 +11620,19 @@ function renderSettingsSection() {
     return;
   }
 
+  if (settingsSection === 'candStages') {
+    var stages = getCandidateStages();
+    el.innerHTML = `<div class="settings-section">
+      <h3>Candidate Stages</h3>
+      <p>The recruitment stages candidates move through within a role (e.g. Phone Screen → Interview → Offer). One per line, in order.</p>
+      <div class="form-field" style="max-width:420px;">
+        <textarea id="candStagesInput" rows="8" style="width:100%;box-sizing:border-box;resize:vertical;font-size:13px;" placeholder="Applied&#10;Phone Screen&#10;Interview&#10;Offer&#10;Hired&#10;Discontinue">${stages.join('\n')}</textarea>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="saveCandidateStages(document.getElementById('candStagesInput').value.split('\\n').map(function(s){return s.trim();}).filter(Boolean));toast('Candidate stages saved')">Save stages</button>
+    </div>`;
+    return;
+  }
+
   if (settingsSection === 'awards') {
     var awards = getAwards();
     el.innerHTML = `<div class="settings-section">
@@ -11893,6 +11977,91 @@ function saveCandidates(pipelineItemId, candidates) {
     localStorage.setItem('er_candidates', JSON.stringify(all));
     fsSet('candidates', 'main', all);
   } catch(e) {}
+}
+
+// Set a candidate's stage
+function setCandidateStage(roleId, candId, stage) {
+  var cands = getCandidates(roleId);
+  var c = cands.find(function(x){ return x.id === candId; });
+  if (!c) return;
+  c.cand_stage = stage;
+  saveCandidates(roleId, cands);
+  toast('Moved to ' + stage);
+}
+
+// Select/deselect all candidates in a stage
+function toggleStageCandidates(headerCb, stage) {
+  document.querySelectorAll('.cand-check').forEach(function(cb){
+    var row = cb.closest('div');
+    // Find the candidate's stage select in the same row
+    var sel = cb.parentElement.querySelector('select');
+    if (sel && sel.value === stage) cb.checked = headerCb.checked;
+  });
+  updateCandSelCount();
+}
+
+function updateCandSelCount() {
+  var n = document.querySelectorAll('.cand-check:checked').length;
+  var el = document.getElementById('candSelCount');
+  if (el) el.textContent = n + ' selected';
+}
+
+// Bulk-email selected candidates: pick a template, generate individualised .eml per candidate
+function bulkEmailCandidates(roleId) {
+  var selected = Array.from(document.querySelectorAll('.cand-check:checked')).map(function(cb){ return cb.getAttribute('data-cand-id'); });
+  if (!selected.length) { alert('Select at least one candidate first (tick the checkboxes).'); return; }
+  var cands = getCandidates(roleId).filter(function(c){ return selected.indexOf(c.id) !== -1; });
+
+  // Build a template picker
+  var emailTemplates = data.templates.filter(function(t){ return t.format === 'email' || t.format === 'letter'; });
+  if (!emailTemplates.length) { alert('No email/letter templates available. Create one first.'); return; }
+
+  var pickerHtml = '<div class="overlay open" id="bulkEmailModal" style="z-index:10000;"><div class="modal" style="width:460px;">'
+    + '<div class="modal-title">Email ' + cands.length + ' candidate' + (cands.length>1?'s':'') + '</div>'
+    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 14px;">Each candidate gets an individual .eml file, filled with their own details, ready to open in Outlook.</p>'
+    + '<div class="form-field"><label>Template</label><select id="bulkEmailTpl">'
+    + emailTemplates.map(function(t){ return '<option value="'+t.id+'">'+t.name+'</option>'; }).join('')
+    + '</select></div>'
+    + '<div style="max-height:160px;overflow-y:auto;margin:10px 0;padding:8px;background:var(--bg);border-radius:var(--r-sm);font-size:12px;">'
+    + cands.map(function(c){ return '<div style="padding:2px 0;color:var(--text2);">• ' + (getEntityDisplayName(c, getCandidateFields())||'Unnamed') + (c.cand_email?' <span style="color:var(--text3);">'+c.cand_email+'</span>':' <span style="color:var(--red);">(no email)</span>') + '</div>'; }).join('')
+    + '</div>'
+    + '<div class="modal-footer">'
+    + '<button class="btn" onclick="document.getElementById(\'bulkEmailModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="runBulkEmail(\''+roleId+'\')">Generate ' + cands.length + ' .eml file' + (cands.length>1?'s':'') + '</button>'
+    + '</div></div></div>';
+  var wrap = document.createElement('div');
+  wrap.innerHTML = pickerHtml;
+  document.body.appendChild(wrap.firstChild);
+  // Store selected IDs for the run
+  window._bulkEmailSelected = selected;
+}
+
+function runBulkEmail(roleId) {
+  var tplId = document.getElementById('bulkEmailTpl').value;
+  var tpl = data.templates.find(function(t){ return t.id === tplId; });
+  if (!tpl) return;
+  var selected = window._bulkEmailSelected || [];
+  var cands = getCandidates(roleId).filter(function(c){ return selected.indexOf(c.id) !== -1; });
+
+  var count = 0;
+  cands.forEach(function(c, idx) {
+    // Resolve this candidate's field values into the template
+    var savedFieldValues = fieldValues;
+    fieldValues = resolveEntityFields(c, 'candidate');
+    // Generate subject and body for this candidate
+    var subj = (tpl.subject || tpl.name || '').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+    var bodyHtml = outlookBody(tpl, true);
+    var bodyText = bodyHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    var cName = getEntityDisplayName(c, getCandidateFields()) || 'candidate';
+    // Stagger downloads slightly so the browser doesn't block them
+    setTimeout(function(){
+      buildAndDownloadEml(cName + ' - ' + tpl.name, subj, bodyText, bodyHtml, []);
+    }, idx * 400);
+    fieldValues = savedFieldValues;
+    count++;
+  });
+  document.getElementById('bulkEmailModal').remove();
+  toast('Generating ' + count + ' individualised email' + (count>1?'s':'') + '…');
 }
 
 var editingCandidateId = null;
@@ -12287,13 +12456,33 @@ function advancePipeline(id) {
 
 var viewingPipelineId = null;
 // Assemble a display name from whatever name fields exist on an entity.
+// ── CANDIDATE STAGES (recruitment pipeline within a role) ─────────────────
+var DEFAULT_CANDIDATE_STAGES = ['Applied','Phone Screen','Interview','Offer','Hired','Discontinue'];
+function getCandidateStages() {
+  if (!appSettings.candidateStages || !appSettings.candidateStages.length) {
+    appSettings.candidateStages = DEFAULT_CANDIDATE_STAGES.slice();
+  }
+  return appSettings.candidateStages;
+}
+function saveCandidateStages(stages) {
+  appSettings.candidateStages = stages.filter(Boolean);
+  saveSettings();
+}
+
 function getEntityDisplayName(entity, fieldDefs) {
   if (!entity) return '';
   if (entity.cand_name) return entity.cand_name;
   if (entity.pf_fullname) return entity.pf_fullname;
   var first = '', last = '', full = '', preferred = '';
+  var readVal = function(f) {
+    // Read by fid, then any alias IDs
+    if (entity[f.id] != null && entity[f.id] !== '') return entity[f.id];
+    var aliases = f.aliasIds || [];
+    for (var i = 0; i < aliases.length; i++) if (entity[aliases[i]]) return entity[aliases[i]];
+    return '';
+  };
   (fieldDefs || []).forEach(function(f) {
-    var v = entity[f.id];
+    var v = readVal(f);
     if (!v) return;
     var lbl = (f.label||'').toLowerCase();
     if (/full name/.test(lbl)) full = v;
@@ -12336,26 +12525,60 @@ function openPipelineDetail(id) {
   const systems = item.systems || [];
 
   const candidates = getCandidates(id);
+  const stages = getCandidateStages();
+  // Group candidates by stage
+  const byStage = {};
+  stages.forEach(function(s){ byStage[s] = []; });
+  var unstaged = [];
+  candidates.forEach(function(c){
+    var st = c.cand_stage || '';
+    if (st && byStage[st]) byStage[st].push(c);
+    else unstaged.push(c);
+  });
+
+  function candRow(c) {
+    var cName = getEntityDisplayName(c, getCandidateFields());
+    var initials = (cName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
+    var stageOpts = stages.map(function(s){ return '<option'+(c.cand_stage===s?' selected':'')+'>'+s+'</option>'; }).join('');
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+      + '<input type="checkbox" class="cand-check" data-cand-id="'+c.id+'" style="accent-color:var(--teal);width:16px;height:16px;flex-shrink:0;cursor:pointer;" onclick="event.stopPropagation()">'
+      + '<div style="width:32px;height:32px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;cursor:pointer;" onclick="openCandidateModal(\''+id+'\',\''+c.id+'\')">'+initials+'</div>'
+      + '<div style="flex:1;min-width:0;cursor:pointer;" onclick="openCandidateModal(\''+id+'\',\''+c.id+'\')">'
+      + '<div style="font-size:13px;font-weight:600;color:var(--text);">'+(cName||'—')+'</div>'
+      + '<div style="font-size:11.5px;color:var(--text3);">'+[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:''].filter(Boolean).join(' · ')+'</div>'
+      + '</div>'
+      + '<select onchange="setCandidateStage(\''+id+'\',\''+c.id+'\',this.value)" onclick="event.stopPropagation()" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);background:white;cursor:pointer;">'+stageOpts+'</select>'
+      + '</div>';
+  }
+
+  var stageSections = stages.map(function(s){
+    var list = byStage[s];
+    if (!list.length) return '';
+    return '<div style="margin-bottom:12px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
+      + '<div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text2);">'
+      + '<input type="checkbox" onclick="toggleStageCandidates(this,\''+s.replace(/'/g,"\\'")+'\')" style="accent-color:var(--teal);cursor:pointer;" title="Select all in '+s+'">'
+      + s + ' <span style="color:var(--text3);font-weight:400;">('+list.length+')</span></div></div>'
+      + list.map(candRow).join('')
+      + '</div>';
+  }).join('');
+  if (unstaged.length) {
+    stageSections += '<div style="margin-bottom:12px;"><div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:5px;">No stage set ('+unstaged.length+')</div>'+unstaged.map(candRow).join('')+'</div>';
+  }
+
   const candidatesHtml = `
     <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);">Candidates (${candidates.length})</div>
         <button class="btn btn-sm btn-primary" onclick="openCandidateModal('${id}')">+ Add candidate</button>
       </div>
-      ${candidates.length ? candidates.map(function(c) {
-        var cName = getEntityDisplayName(c, getCandidateFields());
-        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;cursor:pointer;"
-          onclick="openCandidateModal('${id}','${c.id}')">
-          <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">
-            ${(cName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2)}
-          </div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:600;color:var(--text);">${cName||'—'}</div>
-            <div style="font-size:11.5px;color:var(--text3);">${[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:'', c.cand_salary?c.cand_salary:''].filter(Boolean).join(' · ')}</div>
-          </div>
-          ${c.cand_stage ? `<span style="font-size:10.5px;padding:2px 8px;background:var(--teal-lt);color:var(--teal);border-radius:10px;border:1px solid var(--teal-mid);">${c.cand_stage}</span>` : ''}
-        </div>`;
-      }).join('') : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;padding:4px 0;">No candidates yet.</div>'}
+      ${candidates.length ? `
+        <div id="candBulkBar" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--teal-lt);border:1px solid var(--teal-mid);border-radius:var(--r-sm);margin-bottom:10px;font-size:12px;">
+          <span id="candSelCount" style="font-weight:600;color:var(--teal);">0 selected</span>
+          <span style="color:var(--text3);">·</span>
+          <button class="btn btn-sm" onclick="bulkEmailCandidates('${id}')" style="color:var(--teal);">✉ Email selected from template</button>
+        </div>
+        ${stageSections}` : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;padding:4px 0;">No candidates yet.</div>'}
     </div>`;
 
   document.getElementById('pdBody').innerHTML = `
@@ -12382,6 +12605,11 @@ function openPipelineDetail(id) {
   onboardBtn.style.display = item.stage === 'candidate' ? 'inline-flex' : 'none';
 
   document.getElementById('pipelineDetailModal').classList.add('open');
+
+  // Wire candidate checkbox count updates
+  document.querySelectorAll('.cand-check').forEach(function(cb){
+    cb.addEventListener('change', updateCandSelCount);
+  });
 }
 
 function advancePipelineFromModal() {
