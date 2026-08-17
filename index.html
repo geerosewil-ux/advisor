@@ -2687,7 +2687,7 @@ function renderTemplate(item) {
         <select style="flex:1;padding:4px 8px;border:1px solid var(--teal-mid);border-radius:var(--r-sm);font-family:inherit;font-size:12px;background:white;color:var(--text);outline:none;"
           onchange="(function(sel){var v=sel.value;if(!v)return;var parts=v.split(':');loadEntityIntoTemplate(parts[1],parts[0],'${item.id}');sel.value=''})(this)">
           <option value="">— Select person or candidate —</option>
-          ${allPeople.length ? `<optgroup label="People">${allPeople.map(p => `<option value="people:${p.id}">${p.pf_fullname||'—'}${p.pf_position?' · '+p.pf_position:''}</option>`).join('')}</optgroup>` : ''}
+          ${allPeople.length ? `<optgroup label="People">${allPeople.map(p => `<option value="people:${p.id}">${getEntityDisplayName(p, getProfileFields())||'—'}${p.pf_position?' · '+p.pf_position:''}</option>`).join('')}</optgroup>` : ''}
           ${allCandidates.length ? `<optgroup label="Candidates">${allCandidates.map(c => `<option value="candidate:${c.id}">${c.cand_name||'—'}${c._roleLabel?' · '+c._roleLabel:''} (candidate)</option>`).join('')}</optgroup>` : ''}
         </select>
       </div>` : ''}
@@ -5066,6 +5066,7 @@ function exportToExcel() {
   }
 
   const wb = XLSX.utils.book_new();
+  try {
 
   // ── Sheet 1: Templates ──────────────────────────────────────────────────
   const tplRows = data.templates.map(t => {
@@ -5198,9 +5199,10 @@ function exportToExcel() {
   // ── Sheet: People profiles ──────────────────────────────────────────────
   var people = getPeople();
   var pfDefs = getProfileFields();
+  var safeVal = function(v){ if (v == null) return ''; if (typeof v === 'object') return JSON.stringify(v); return String(v); };
   var peopleRows = people.map(function(p) {
     var row = { ID: p.id, 'Display Name': getEntityDisplayName(p, pfDefs) };
-    pfDefs.forEach(function(f){ row[f.label] = readEntityFieldValue(p, f) || ''; });
+    pfDefs.forEach(function(f){ if(f.label) row[f.label] = safeVal(readEntityFieldValue(p, f)); });
     return row;
   });
   var peopleSheet = XLSX.utils.json_to_sheet(peopleRows.length ? peopleRows : [{}]);
@@ -5209,22 +5211,22 @@ function exportToExcel() {
   // ── Sheet: Recruitment Pipeline (roles) ─────────────────────────────────
   var pipeline = (typeof loadPipeline === 'function') ? loadPipeline() : [];
   var pipelineRows = pipeline.map(function(it) {
-    return { ID: it.id, Position: it.position||'', Department: it.dept||'', Location: it.location||'',
-      Manager: it.manager||'', Award: it.award||'', Classification: it.classification||'',
-      'Employment Type': it.empType||'', 'Start Date': it.startDate||'', Stage: it.stage||'',
-      Created: it.created||'' };
+    return { ID: it.id, Position: safeVal(it.position), Department: safeVal(it.dept), Location: safeVal(it.location),
+      Manager: safeVal(it.manager), Award: safeVal(it.award), Classification: safeVal(it.classification),
+      'Employment Type': safeVal(it.empType), 'Start Date': safeVal(it.startDate), Stage: safeVal(it.stage),
+      Created: safeVal(it.created) };
   });
   var pipelineSheet = XLSX.utils.json_to_sheet(pipelineRows.length ? pipelineRows : [{}]);
   XLSX.utils.book_append_sheet(wb, pipelineSheet, 'Pipeline');
 
   // ── Sheet: Candidates (all, across roles, with stage) ───────────────────
   var candDefs = getCandidateFields();
-  var allCandsByRole = getCandidates(); // returns the full map
+  var allCandsByRole = getCandidates(); // full map
   var candRows = [];
   Object.keys(allCandsByRole||{}).forEach(function(roleId) {
     (allCandsByRole[roleId]||[]).forEach(function(c) {
-      var row = { ID: c.id, RoleID: roleId, 'Display Name': getEntityDisplayName(c, candDefs), Stage: c.cand_stage||'' };
-      candDefs.forEach(function(f){ if(f.id!=='cand_stage') row[f.label] = readEntityFieldValue(c, f) || ''; });
+      var row = { ID: c.id, RoleID: roleId, 'Display Name': getEntityDisplayName(c, candDefs), Stage: safeVal(c.cand_stage) };
+      candDefs.forEach(function(f){ if(f.id!=='cand_stage' && f.label) row[f.label] = safeVal(readEntityFieldValue(c, f)); });
       candRows.push(row);
     });
   });
@@ -5278,6 +5280,10 @@ function exportToExcel() {
 
   XLSX.writeFile(wb, `er-adviser-export-${todayStr()}.xlsx`);
   toast('Excel export downloaded ✓');
+  } catch(err) {
+    console.error('EXPORT ERROR:', err);
+    alert('Export failed: ' + err.message + '\n\nCheck the console for details.');
+  }
 }
 
 function importFromExcel(file) {
@@ -9090,7 +9096,8 @@ function renderPeople() {
   var people = getPeople();
   var q = peopleSearchQ.toLowerCase();
   var filtered = q ? people.filter(function(p){
-    return (p.pf_fullname||'').toLowerCase().includes(q)||(p.pf_position||'').toLowerCase().includes(q)||(p.pf_department||'').toLowerCase().includes(q);
+    var dn = getEntityDisplayName(p, getProfileFields()).toLowerCase();
+    return dn.includes(q)||(p.pf_fullname||'').toLowerCase().includes(q)||(p.pf_position||'').toLowerCase().includes(q)||(p.pf_department||'').toLowerCase().includes(q);
   }) : people;
   var cases = loadCases();
 
@@ -9215,7 +9222,7 @@ function renderProfileFieldInput(f, p) {
   }
   if(f.type==='manager'){
     var pmpeople=getPeople();
-    var pmopts='<option value="">— Select manager —</option>'+pmpeople.map(function(pp){return '<option value="'+(pp.pf_fullname||'').replace(/"/g,'&quot;')+'" data-dept="'+(pp.pf_department||'')+'"'+(val===pp.pf_fullname?' selected':'')+'>'+(pp.pf_fullname||'—')+(pp.pf_position?' ('+pp.pf_position+')':'')+'</option>';}).join('');
+    var pmopts='<option value="">— Select manager —</option>'+pmpeople.map(function(pp){var pnm=getEntityDisplayName(pp,getProfileFields());return '<option value="'+pp.id+'" data-dept="'+(pp.pf_department||'')+'"'+(val===pp.id||val===pnm?' selected':'')+'>'+(pnm||'—')+(pp.pf_position?' ('+pp.pf_position+')':'')+'</option>';}).join('');
     return label+'<select id="'+id+'" data-manager-field="'+f.id+'">'+pmopts+'</select>';
   }
   if(f.type==='award'){
@@ -10926,8 +10933,9 @@ function onDepartmentFieldChange(deptFieldId, deptValue) {
     var current = sel.value;
     var people = getManagersForDepartment(deptValue);
     sel.innerHTML = '<option value="">— Select manager —</option>' + people.map(function(p){
-      return '<option value="' + (p.pf_fullname||'').replace(/"/g,'&quot;') + '"' + ((p.pf_fullname||'')===current?' selected':'') + '>'
-        + (p.pf_fullname||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
+      var pnm=getEntityDisplayName(p,getProfileFields());
+      return '<option value="' + p.id + '"' + (p.id===current||pnm===current?' selected':'') + '>'
+        + (pnm||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
     }).join('');
   });
 }
@@ -12199,7 +12207,8 @@ function renderCandidateField(f, c) {
     var opts = '<option value="">— Select manager —</option>'
       + people.map(function(p) {
           var title = p.pf_position ? ' (' + p.pf_position + ')' : '';
-          return '<option value="' + (p.pf_fullname||'').replace(/"/g,'&quot;') + '" ' + (val===p.pf_fullname?'selected':'') + '>' + (p.pf_fullname||'—') + title + '</option>';
+          var pnm=getEntityDisplayName(p,getProfileFields());
+          return '<option value="' + p.id + '" ' + (val===p.id||val===pnm?'selected':'') + '>' + (pnm||'—') + title + '</option>';
         }).join('');
     return label + '<select id="' + id + '">' + opts + '</select>';
   }
@@ -12223,7 +12232,8 @@ function renderCandidateField(f, c) {
   if (f.type === 'manager') {
     var tmpeople = getPeople();
     var tmopts = '<option value="">— Select manager —</option>' + tmpeople.map(function(p){
-      return '<option value="' + (p.pf_fullname||'').replace(/"/g,'&quot;') + '" data-dept="' + (p.pf_department||'') + '"' + (val===p.pf_fullname?' selected':'') + '>' + (p.pf_fullname||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
+      var pnm=getEntityDisplayName(p,getProfileFields());
+      return '<option value="' + p.id + '" data-dept="' + (p.pf_department||'') + '"' + (val===p.id||val===pnm?' selected':'') + '>' + (pnm||'—') + (p.pf_position?' ('+p.pf_position+')':'') + '</option>';
     }).join('');
     return label + '<select id="' + id + '" data-manager-field="' + f.id + '">' + tmopts + '</select>';
   }
