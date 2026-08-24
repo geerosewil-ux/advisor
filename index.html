@@ -12018,6 +12018,21 @@ function setCandidateStage(roleId, candId, stage) {
   c.cand_stage = stage;
   saveCandidates(roleId, cands);
   toast('Moved to ' + stage);
+  // Reaching "Hired" offers to progress to onboarding
+  if ((stage||'').toLowerCase() === 'hired') {
+    setTimeout(function(){ confirmProgressToOnboarding(roleId, candId); }, 300);
+  }
+}
+
+// Confirm before progressing (this archives the role and removes the candidate)
+function confirmProgressToOnboarding(roleId, candId) {
+  var cands = getCandidates(roleId);
+  var c = cands.find(function(x){ return x.id === candId; });
+  if (!c) { toast('Candidate not found'); return; }
+  var nm = getEntityDisplayName(c, getCandidateFields()) || 'this candidate';
+  if (confirm('Progress ' + nm + ' to onboarding?\n\nThis will:\n• Create an onboarding case in the lifecycle\n• Create a People profile for them\n• Remove them from the candidate list\n• Archive this recruitment role\n\nContinue?')) {
+    progressCandidateToOnboarding(roleId, candId);
+  }
 }
 
 // Select/deselect all candidates in a stage
@@ -12385,14 +12400,16 @@ var selectedPipelineId = null;
 function renderRecruitment() {
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('mainContent').style.display = 'block';
-  const items = loadPipeline();
+  const allItems = loadPipeline();
+  const items = allItems.filter(function(x){ return !x.archived; });
+  const archivedCount = allItems.length - items.length;
   const mc = document.getElementById('mainContent');
 
   mc.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
       <div>
         <h2 style="font-size:19px;font-weight:600;letter-spacing:-.3px;">Recruitment Pipeline</h2>
-        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${items.length} open position${items.length!==1?'s':''}</p>
+        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${items.length} open position${items.length!==1?'s':''}${archivedCount?` · <a href="#" onclick="showArchivedRoles();return false;" style="color:var(--text3);">${archivedCount} archived</a>`:''}</p>
       </div>
       <div style="display:flex;gap:8px;">
         <div style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;">
@@ -12415,6 +12432,36 @@ function renderRecruitment() {
 
   if (pipelineView === 'kanban') renderKanban(items);
   else renderPipelineList(items);
+}
+
+function showArchivedRoles() {
+  var archived = loadPipeline().filter(function(x){ return x.archived; });
+  if (!archived.length) { toast('No archived roles'); return; }
+  var html = '<div class="overlay open" id="archivedModal" style="z-index:10000;"><div class="modal" style="width:520px;max-height:80vh;overflow-y:auto;">'
+    + '<div class="modal-title">Archived Roles (' + archived.length + ')</div>'
+    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 14px;">Roles archived after a candidate was onboarded.</p>'
+    + archived.map(function(r){
+        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+          + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:13px;font-weight:600;color:var(--text);">' + (r.position||'Untitled role') + '</div>'
+          + '<div style="font-size:11.5px;color:var(--text3);">' + [r.hiredCandidate?'Hired: '+r.hiredCandidate:'', r.archivedDate?'Archived '+r.archivedDate:''].filter(Boolean).join(' · ') + '</div>'
+          + '</div>'
+          + '<button class="btn btn-sm" onclick="unarchiveRole(\''+r.id+'\')" style="font-size:11px;">Restore</button>'
+          + '</div>';
+      }).join('')
+    + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'archivedModal\').remove()">Close</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap.firstChild);
+}
+function unarchiveRole(id) {
+  var pipeline = loadPipeline();
+  var r = pipeline.find(function(x){ return x.id === id; });
+  if (r) { r.archived = false; savePipeline(pipeline); }
+  var m = document.getElementById('archivedModal'); if (m) m.remove();
+  renderRecruitment();
+  toast('Role restored');
 }
 
 function renderKanban(items) {
@@ -12587,6 +12634,7 @@ function openPipelineDetail(id) {
       + '<div style="font-size:11.5px;color:var(--text3);">'+[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:''].filter(Boolean).join(' · ')+'</div>'
       + '</div>'
       + '<select onchange="setCandidateStage(\''+id+'\',\''+c.id+'\',this.value)" onclick="event.stopPropagation()" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);background:white;cursor:pointer;">'+stageOpts+'</select>'
+      + '<button onclick="event.stopPropagation();confirmProgressToOnboarding(\''+id+'\',\''+c.id+'\')" title="Progress to onboarding" style="font-size:11px;padding:4px 8px;border:1px solid var(--teal);background:var(--teal);color:white;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">→ Onboard</button>'
       + '</div>';
   }
 
@@ -12693,40 +12741,145 @@ function createOnboardingFromPipeline() {
   createOnboardingFromPipelineItem(item);
 }
 
-function createOnboardingFromPipelineItem(item) {
-  lcJourneyId = 'onboarding';
-  // Switch to lifecycle tab
-  switchTab('lifecycle', document.getElementById('tabLifecycle'));
-  lcView = 'home';
-  renderLcHome();
-  setTimeout(() => {
-    // Open new case modal pre-filled from pipeline item
-    document.getElementById('caseModalTitle').textContent = 'New Onboarding Case — ' + item.position;
-    document.getElementById('caseModal').dataset.editId = '';
-    document.getElementById('casePosition').value = item.position||'';
-    document.getElementById('caseClassification').value = item.classification||'';
-    document.getElementById('caseDept').value = item.dept||'';
-    document.getElementById('caseLocation').value = item.location||'';
-    document.getElementById('caseEmpType').value = item.empType||'';
-    document.getElementById('caseHours').value = item.hours||'';
-    document.getElementById('caseAward').value = item.award||'';
-    document.getElementById('caseStart').value = item.startDate||'';
-    document.getElementById('caseEndDate').value = item.endDate||'';
-    document.getElementById('caseProbation').value = item.probation||'';
-    document.getElementById('caseManager').value = item.manager||'';
-    document.getElementById('caseEmployee').value = '';
-    document.getElementById('caseNotes').value = [
-      item.notes,
-      item.budget ? 'Budget: ' + item.budget : '',
-      (item.assets||[]).length ? 'Assets: ' + item.assets.join(', ') : '',
-      (item.systems||[]).length ? 'Systems: ' + item.systems.join(', ') : ''
-    ].filter(Boolean).join('\n');
-    // Pre-fill checkboxes for IT template
-    fieldValues['CHECK: Laptop | Desktop | Monitor | Docking station | Mobile phone | Desk phone | iPad/Tablet | Building access pass | Parking pass | Company credit card | Locker key'] = item.assets||[];
-    fieldValues['CHECK: Microsoft 365 / Email | SharePoint / Teams | Network / VPN | HR System | Finance System | CRM | Project Management Tool | Payroll System | Building Access System'] = item.systems||[];
-    document.getElementById('caseModal').classList.add('open');
-    toast('Fill in the employee name to complete onboarding case');
-  }, 200);
+// ── PROGRESS CANDIDATE TO ONBOARDING ──────────────────────────────────────
+// Turns a selected candidate into a live onboarding case:
+// - creates a People profile from the candidate (field-matched by meaning)
+// - creates an onboarding case carrying candidate + role data
+// - removes the candidate from the active list; archives the role
+// - links the case back to the originating candidate & role
+function progressCandidateToOnboarding(roleId, candId) {
+  var role = loadPipeline().find(function(x){ return x.id === roleId; });
+  var cands = getCandidates(roleId);
+  var cand = cands.find(function(x){ return x.id === candId; });
+  if (!cand) { toast('Candidate not found'); return; }
+
+  var candDefs = getCandidateFields();
+  var profDefs = getProfileFields();
+  var onboardDefs = getCaseFormForJourney('onboarding');
+  var candName = getEntityDisplayName(cand, candDefs) || 'New employee';
+
+  // Build a meaning-keyed map of the candidate's values (LABEL upper → value)
+  var candByLabel = {};
+  candDefs.forEach(function(f){
+    var v = readEntityFieldValue(cand, f);
+    if (v) candByLabel[(f.label||'').toUpperCase().trim()] = v;
+  });
+  // Also fold in the role's values (position, award, manager, location, etc.)
+  if (role) {
+    var roleDefs = getRoleFields();
+    roleDefs.forEach(function(f){
+      var v = readEntityFieldValue(role, f);
+      if (v && !candByLabel[(f.label||'').toUpperCase().trim()]) candByLabel[(f.label||'').toUpperCase().trim()] = v;
+    });
+    // canonical role props as fallback
+    var roleMap = { 'POSITION':role.position, 'DEPARTMENT':role.dept, 'LOCATION':role.location,
+      'REPORTING MANAGER':role.manager, 'MANAGER':role.manager, 'AWARD':role.award,
+      'CLASSIFICATION':role.classification, 'EMPLOYMENT TYPE':role.empType, 'START DATE':role.startDate };
+    Object.keys(roleMap).forEach(function(k){ if(roleMap[k] && !candByLabel[k]) candByLabel[k] = roleMap[k]; });
+  }
+
+  // 1) Create a People profile from the candidate (match profile fields by label meaning)
+  var people = getPeople();
+  var newPerson = { id: 'p' + Date.now(), created: todayStr(), _fromCandidate: candId, _fromRole: roleId };
+  profDefs.forEach(function(pf){
+    var lbl = (pf.label||'').toUpperCase().trim();
+    // direct label match first
+    var v = candByLabel[lbl] || '';
+    // meaning fallbacks for common name/contact fields
+    if (!v) {
+      if (/PREFERRED/.test(lbl)) v = candByLabel['PREFERRED NAME'] || candByLabel['FIRST NAME'] || '';
+      else if (/FIRST|GIVEN/.test(lbl)) v = candByLabel['FIRST NAME'] || candByLabel['GIVEN NAME'] || '';
+      else if (/LAST|SURNAME|FAMILY/.test(lbl)) v = candByLabel['LAST NAME'] || candByLabel['SURNAME'] || '';
+      else if (/EMAIL/.test(lbl)) v = candByLabel['EMAIL'] || candByLabel['CANDIDATE EMAIL'] || '';
+      else if (/MOBILE|PHONE/.test(lbl)) v = candByLabel['MOBILE'] || candByLabel['PHONE'] || candByLabel['CANDIDATE PHONE'] || '';
+      else if (/POSITION|ROLE|TITLE/.test(lbl)) v = candByLabel['POSITION'] || '';
+      else if (/DEPARTMENT|TEAM/.test(lbl)) v = candByLabel['DEPARTMENT'] || '';
+    }
+    if (v) newPerson[pf.id] = v;
+  });
+  people.push(newPerson);
+  savePeople(people);
+
+  // 2) Create the onboarding case, carrying candidate + role data into the onboarding form
+  var dynValues = {};
+  onboardDefs.forEach(function(f){
+    var lbl = (f.label||'').toUpperCase().trim();
+    var v = candByLabel[lbl] || '';
+    if (!v) {
+      if (/PREFERRED/.test(lbl)) v = candByLabel['PREFERRED NAME'] || candByLabel['FIRST NAME'] || '';
+      else if (/FIRST|GIVEN/.test(lbl)) v = candByLabel['FIRST NAME'] || '';
+      else if (/LAST|SURNAME|FAMILY/.test(lbl)) v = candByLabel['LAST NAME'] || candByLabel['SURNAME'] || '';
+      else if (/EMPLOYEE|FULL NAME|NAME/.test(lbl)) v = candName;
+      else if (/EMAIL/.test(lbl)) v = candByLabel['EMAIL'] || '';
+      else if (/MOBILE|PHONE/.test(lbl)) v = candByLabel['MOBILE'] || candByLabel['PHONE'] || '';
+      else if (/POSITION|ROLE|TITLE/.test(lbl)) v = candByLabel['POSITION'] || '';
+      else if (/DEPARTMENT|TEAM/.test(lbl)) v = candByLabel['DEPARTMENT'] || '';
+      else if (/LOCATION/.test(lbl)) v = candByLabel['LOCATION'] || '';
+      else if (/MANAGER/.test(lbl)) v = candByLabel['REPORTING MANAGER'] || candByLabel['MANAGER'] || '';
+      else if (/AWARD/.test(lbl)) v = candByLabel['AWARD'] || '';
+      else if (/CLASSIFICATION/.test(lbl)) v = candByLabel['CLASSIFICATION'] || '';
+      else if (/EMPLOYMENT TYPE/.test(lbl)) v = candByLabel['EMPLOYMENT TYPE'] || '';
+      else if (/START DATE/.test(lbl)) v = candByLabel['START DATE'] || '';
+    }
+    if (v) dynValues[f.id] = v;
+  });
+
+  var cases = loadCases();
+  var newCase = {
+    id: 'c' + Date.now(),
+    journeyId: 'onboarding',
+    status: 'active',
+    stepStatus: {}, stepNotes: {}, stepDates: {},
+    created: todayStr(),
+    employee: candName,
+    personId: newPerson.id,
+    _fromCandidate: candId,
+    _fromRole: roleId,
+    _dynValues: dynValues,
+    location: dynValues.location || (role ? role.location : '') || '',
+  };
+  cases.push(newCase);
+  saveCases(cases);
+
+  // 3) Remove candidate from the active recruitment list
+  var remaining = cands.filter(function(x){ return x.id !== candId; });
+  saveCandidates(roleId, remaining);
+
+  // 4) Archive the role (kept for records, hidden from active pipeline)
+  if (role) {
+    var pipeline = loadPipeline();
+    var ri = pipeline.findIndex(function(x){ return x.id === roleId; });
+    if (ri >= 0) {
+      pipeline[ri].archived = true;
+      pipeline[ri].archivedDate = todayStr();
+      pipeline[ri].hiredCandidate = candName;
+      pipeline[ri].onboardingCaseId = newCase.id;
+      savePipeline(pipeline);
+    }
+  }
+
+  // 5) Silent create — confirm with toast, refresh views
+  if (document.getElementById('pipelineDetailModal')) document.getElementById('pipelineDetailModal').classList.remove('open');
+  if (currentTab === 'recruitment' || lcView === 'recruitment') renderRecruitment();
+  toast('✓ ' + candName + ' onboarded — case created, profile added, role archived');
+}
+
+// Legacy entry points now route to the candidate-based flow.
+// If called on a role with candidates, use the Hired candidate (or prompt to pick).
+function createOnboardingFromItem(id) {
+  var cands = getCandidates(id);
+  if (!cands.length) { toast('Add a candidate to this role first'); return; }
+  // Prefer a candidate already at "Hired"; else if only one, use it; else ask
+  var hired = cands.filter(function(c){ return (c.cand_stage||'').toLowerCase() === 'hired'; });
+  if (hired.length === 1) { progressCandidateToOnboarding(id, hired[0].id); return; }
+  if (cands.length === 1) { progressCandidateToOnboarding(id, cands[0].id); return; }
+  // Multiple — open the pipeline detail so they can pick a candidate to progress
+  openPipelineDetail(id);
+  toast('Pick a candidate and click "Progress to onboarding"');
+}
+function createOnboardingFromPipeline() {
+  if (!viewingPipelineId) return;
+  createOnboardingFromItem(viewingPipelineId);
 }
 
 
