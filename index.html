@@ -3066,12 +3066,15 @@ function outlookBody(item, forSend) {
         return `<tr><td width="18" valign="top" style="font-family:${ff};font-size:${fs};color:#4A5568;padding-top:2px;">${checked}</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${text}</td></tr>`;
       }
       if (tag === 'table') {
-        // Pass through tables with inline styles
+        // Pass through tables with inline styles (preserve colspan for schedule totals etc.)
         return `<table width="100%" cellpadding="6" cellspacing="0" border="0" style="margin:8px 0;border-collapse:collapse;">${
           Array.from(node.querySelectorAll('tr')).map(tr =>
             `<tr>${Array.from(tr.querySelectorAll('th,td')).map(cell => {
               const isTh = cell.tagName.toLowerCase() === 'th';
-              return `<${isTh?'th':'td'} style="font-family:${ff};font-size:${fs};${isTh?`background:${C.bodyHeading === C.accentLine ? '#EAF3F3' : '#f0f4f8'};color:${C.bodyHeading};font-weight:bold;`:`color:${fc};`}border:1px solid #E2E6EC;padding:6px 10px;text-align:left;">${cell.innerHTML}</${isTh?'th':'td'}>`;
+              const cs = cell.getAttribute('colspan');
+              const csAttr = cs ? ` colspan="${cs}"` : '';
+              const align = cell.style && cell.style.textAlign ? cell.style.textAlign : 'left';
+              return `<${isTh?'th':'td'}${csAttr} style="font-family:${ff};font-size:${fs};${isTh?`background:${C.bodyHeading === C.accentLine ? '#EAF3F3' : '#f0f4f8'};color:${C.bodyHeading};font-weight:bold;`:`color:${fc};`}border:1px solid #E2E6EC;padding:6px 10px;text-align:${align};">${cell.innerHTML}</${isTh?'th':'td'}>`;
             }).join('')}</tr>`
           ).join('')
         }</table>`;
@@ -4791,6 +4794,17 @@ function resolveEntityFields(entity, entityType) {
     var val = raw;
     if (f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(raw))) val = formatDateValue(raw);
     var labelKey = (f.label || '').toUpperCase().trim();
+    if (f.type === 'schedule') {
+      // Render the schedule to table/summary/hours placeholders
+      var sched = parseSchedule(val);
+      if (labelKey) values[labelKey] = renderScheduleTable(sched);
+      values[labelKey + ' SUMMARY'] = renderScheduleSummary(sched);
+      values['WORK SCHEDULE'] = renderScheduleTable(sched);
+      values['WORK SCHEDULE SUMMARY'] = renderScheduleSummary(sched);
+      values['ORDINARY HOURS'] = String(scheduleTotalPerWeek(sched));
+      values[f.id] = val;
+      return;
+    }
     if (labelKey) values[labelKey] = val;
     values[f.id] = val;  // f.id is the fid
     if (f.type === 'location' || /\blocation\b/i.test(f.label||'')) expandLocationAttributes(val, values);
@@ -6857,7 +6871,16 @@ function getAllPlaceholders() {
     out.push(p);
   };
   // 1. Unified field library
-  getFieldLib().forEach(function(f){ add(f.label, f.group||'Fields', f.type, f.options); });
+  getFieldLib().forEach(function(f){
+    add(f.label, f.group||'Fields', f.type, f.options);
+    if (f.type === 'schedule') {
+      add(f.label + ' Summary', 'Schedule', 'text');
+    }
+  });
+  // Schedule companion placeholders (always available)
+  add('Ordinary Hours', 'Schedule', 'text');
+  add('Work Schedule', 'Schedule', 'schedule');
+  add('Work Schedule Summary', 'Schedule', 'text');
   // 2. ALL form field sources — so every form field is a placeholder option
   (typeof getProfileFields==='function'?getProfileFields():[]).forEach(function(f){ add(f.label, 'People', f.type, f.options); });
   (typeof getCandidateFields==='function'?getCandidateFields():[]).forEach(function(f){ add(f.label, 'Candidate', f.type, f.options); });
@@ -7213,8 +7236,8 @@ function editCfField(idx, mode, journeyId) {
   panel.id = '_cfEditPanel';
   panel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);z-index:9999;width:500px;max-height:90vh;overflow-y:auto;padding:24px;';
 
-  var typeOptions = ['text','textarea','date','datetime','number','yesno','select','multiselect','composite','location','manager','award','classification'].map(function(t) {
-    return '<option value="' + t + '"' + (f.type===t?' selected':'') + '>' + {text:'Text',textarea:'Text area',date:'Date',datetime:'Date & time',number:'Number',yesno:'Yes / No',select:'Single select',multiselect:'Multi-select',composite:'Composite (combined fields)',location:'Location (reference)',manager:'Manager (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'}[t] + '</option>';
+  var typeOptions = ['text','textarea','date','datetime','number','yesno','select','multiselect','composite','schedule','location','manager','award','classification'].map(function(t) {
+    return '<option value="' + t + '"' + (f.type===t?' selected':'') + '>' + {text:'Text',textarea:'Text area',date:'Date',datetime:'Date & time',number:'Number',yesno:'Yes / No',select:'Single select',multiselect:'Multi-select',composite:'Composite (combined fields)',schedule:'Work Schedule (table)',location:'Location (reference)',manager:'Manager (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'}[t] + '</option>';
   }).join('');
 
   panel.innerHTML = `
@@ -7551,6 +7574,8 @@ function renderCfFieldInput(f) {
     case 'composite':
       return label + '<input id="cf_input_' + f.id + '" data-composite="' + (f.pattern||'').replace(/"/g,'&quot;') + '" placeholder="Auto-fills from: ' + (f.pattern||'').replace(/"/g,'&quot;') + '" style="background:#FFFBF5;">'
         + '<div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
+    case 'schedule':
+      return label + '<div id="cf_sched_wrap_' + f.id + '">' + renderScheduleEditor('cf_input_' + f.id, emptySchedule(), '') + '</div>';
     case 'manager':
     default: {
       // Auto-detect date/datetime from label when type is generic text
@@ -7626,6 +7651,19 @@ function getCaseFormValues(journeyId) {
       }
     } else {
       val = document.getElementById('cf_input_' + f.id)?.value?.trim() || '';
+    }
+    // Schedule: the hidden input holds JSON — render to table/summary/hours placeholders
+    if (effectiveType === 'schedule' || f.type === 'schedule') {
+      var schedRaw = document.getElementById('cf_input_' + f.id)?.value || '';
+      var sched = parseSchedule(schedRaw);
+      var lblK = (f.label || '').toUpperCase().trim();
+      if (lblK) values[lblK] = renderScheduleTable(sched);
+      values['WORK SCHEDULE'] = renderScheduleTable(sched);
+      values['WORK SCHEDULE SUMMARY'] = renderScheduleSummary(sched);
+      if (lblK) values[lblK + ' SUMMARY'] = renderScheduleSummary(sched);
+      values['ORDINARY HOURS'] = String(scheduleTotalPerWeek(sched));
+      values[f.id] = schedRaw;
+      return;
     }
     // Store by field ID AND by exact-match label (uppercase) so templates resolve directly
     values[f.id] = val;
@@ -8585,8 +8623,8 @@ function flEditPanel(idx) {
     + '<div class="form-row" style="gap:8px;margin-bottom:10px;">'
     + '<div class="form-field" style="flex:1;margin:0;"><label>Type</label>'
     + '<select id="flEdType" onchange="flEdTypeChange(this.value)">'
-    + ['text','textarea','date','datetime','number','yesno','select','multiselect','checklist','composite','location','manager','award','classification'].map(function(t){
-        var labels={text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes / No',select:'Single Select',multiselect:'Multi-Select',checklist:'Checklist',composite:'Composite (combined fields)',location:'Office Location (reference)',manager:'Manager / Person (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'};
+    + ['text','textarea','date','datetime','number','yesno','select','multiselect','checklist','composite','schedule','location','manager','award','classification'].map(function(t){
+        var labels={text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes / No',select:'Single Select',multiselect:'Multi-Select',checklist:'Checklist',composite:'Composite (combined fields)',schedule:'Work Schedule (table)',location:'Office Location (reference)',manager:'Manager / Person (from People)',award:'Award (reference)',classification:'Classification (filtered by Award)'};
         return '<option value="'+t+'" '+(f.type===t?'selected':'')+'>'+labels[t]+'</option>';
       }).join('')
     + '</select></div>'
@@ -9031,6 +9069,119 @@ function computeCompositeFromValues(pattern, values) {
   });
 }
 
+// ── WORK SCHEDULE ─────────────────────────────────────────────────────────
+var SCHEDULE_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+var SCHEDULE_DAY_FULL = {Mon:'Monday',Tue:'Tuesday',Wed:'Wednesday',Thu:'Thursday',Fri:'Friday',Sat:'Saturday',Sun:'Sunday'};
+
+function emptySchedule() { return { weeks: [{ days: {} }], pattern: 'fixed', totalOverride: null, notes: '' }; }
+function parseSchedule(v) {
+  if (!v) return emptySchedule();
+  if (typeof v === 'object') return v;
+  try { var o = JSON.parse(v); return (o && o.weeks) ? o : emptySchedule(); }
+  catch(e) { return emptySchedule(); }
+}
+function scheduleDayHours(day) {
+  if (!day || !day.start || !day.finish) return 0;
+  var s = day.start.split(':'), f = day.finish.split(':');
+  var sm = (+s[0])*60 + (+s[1]), fm = (+f[0])*60 + (+f[1]);
+  var mins = fm - sm;
+  if (mins <= 0) return 0;
+  return Math.round((mins/60) * 100) / 100;
+}
+function scheduleWeekHours(week) {
+  if (!week || !week.days) return 0;
+  var total = 0;
+  SCHEDULE_DAYS.forEach(function(d){
+    var day = week.days[d];
+    if (day) total += (day.hours != null ? +day.hours : scheduleDayHours(day));
+  });
+  return Math.round(total * 100) / 100;
+}
+function scheduleTotalPerWeek(sched) {
+  sched = parseSchedule(sched);
+  if (sched.totalOverride != null && sched.totalOverride !== '') return +sched.totalOverride;
+  var weeks = sched.weeks || [];
+  if (!weeks.length) return 0;
+  var sum = weeks.reduce(function(a,w){ return a + scheduleWeekHours(w); }, 0);
+  return Math.round((sum / weeks.length) * 100) / 100;
+}
+function fmtTime12(t) {
+  if (!t) return '';
+  var p = t.split(':'), h = +p[0], m = p[1] || '00';
+  var ap = h < 12 ? 'am' : 'pm';
+  var h12 = h % 12; if (h12 === 0) h12 = 12;
+  return h12 + ':' + m + ap;
+}
+function renderScheduleTable(sched) {
+  sched = parseSchedule(sched);
+  var ff = 'Aptos,sans-serif';
+  var weeks = sched.weeks || [];
+  if (!weeks.length || weeks.every(function(w){ return !w.days || !Object.keys(w.days).length; })) {
+    return sched.notes ? '<p style="font-family:'+ff+';font-size:15px;margin:0;">'+sched.notes+'</p>' : '';
+  }
+  var multi = weeks.length > 1;
+  var out = '';
+  weeks.forEach(function(week, wi) {
+    var workedDays = SCHEDULE_DAYS.filter(function(d){ return week.days && week.days[d]; });
+    if (!workedDays.length) return;
+    if (multi) out += '<p style="font-family:'+ff+';font-size:14px;font-weight:700;margin:'+(wi?'14px':'0')+' 0 6px;">Week '+(wi+1)+'</p>';
+    out += '<table style="border-collapse:collapse;font-family:'+ff+';font-size:14px;margin:0 0 4px;width:auto;">'
+      + '<thead><tr>'
+      + '<th style="text-align:left;padding:5px 16px 5px 0;border-bottom:1.5px solid #333;font-weight:700;">Day</th>'
+      + '<th style="text-align:left;padding:5px 16px 5px 0;border-bottom:1.5px solid #333;font-weight:700;">Start</th>'
+      + '<th style="text-align:left;padding:5px 16px 5px 0;border-bottom:1.5px solid #333;font-weight:700;">Finish</th>'
+      + '<th style="text-align:right;padding:5px 0;border-bottom:1.5px solid #333;font-weight:700;">Hours</th>'
+      + '</tr></thead><tbody>';
+    workedDays.forEach(function(d){
+      var day = week.days[d];
+      var hrs = day.hours != null ? day.hours : scheduleDayHours(day);
+      out += '<tr>'
+        + '<td style="padding:5px 16px 5px 0;border-bottom:0.5px solid #ddd;">'+SCHEDULE_DAY_FULL[d]+'</td>'
+        + '<td style="padding:5px 16px 5px 0;border-bottom:0.5px solid #ddd;">'+fmtTime12(day.start)+'</td>'
+        + '<td style="padding:5px 16px 5px 0;border-bottom:0.5px solid #ddd;">'+fmtTime12(day.finish)+'</td>'
+        + '<td style="padding:5px 0;border-bottom:0.5px solid #ddd;text-align:right;">'+hrs+'</td>'
+        + '</tr>';
+    });
+    out += '<tr><td colspan="3" style="padding:6px 16px 0 0;font-weight:700;">Total per week</td>'
+      + '<td style="padding:6px 0 0;text-align:right;font-weight:700;">'+scheduleWeekHours(week)+'</td></tr>';
+    out += '</tbody></table>';
+  });
+  if (sched.notes) out += '<p style="font-family:'+ff+';font-size:13px;color:#555;margin:4px 0 0;font-style:italic;">'+sched.notes+'</p>';
+  return out;
+}
+function renderScheduleSummary(sched) {
+  sched = parseSchedule(sched);
+  var weeks = sched.weeks || [];
+  var parts = [];
+  weeks.forEach(function(week, wi) {
+    var workedDays = SCHEDULE_DAYS.filter(function(d){ return week.days && week.days[d]; });
+    if (!workedDays.length) return;
+    var groups = [];
+    workedDays.forEach(function(d){
+      var day = week.days[d];
+      var key = day.start + '-' + day.finish;
+      var last = groups[groups.length-1];
+      if (last && last.key === key && SCHEDULE_DAYS.indexOf(d) === SCHEDULE_DAYS.indexOf(last.days[last.days.length-1]) + 1) {
+        last.days.push(d);
+      } else {
+        groups.push({ key: key, days: [d], start: day.start, finish: day.finish });
+      }
+    });
+    var groupStrs = groups.map(function(g){
+      var dayLabel = g.days.length > 1
+        ? SCHEDULE_DAY_FULL[g.days[0]] + '–' + SCHEDULE_DAY_FULL[g.days[g.days.length-1]]
+        : SCHEDULE_DAY_FULL[g.days[0]];
+      return dayLabel + ' ' + fmtTime12(g.start) + '–' + fmtTime12(g.finish);
+    });
+    var wkLabel = weeks.length > 1 ? 'Week ' + (wi+1) + ': ' : '';
+    var joined = groupStrs.length > 1
+      ? groupStrs.slice(0,-1).join(', ') + ', and ' + groupStrs[groupStrs.length-1]
+      : groupStrs[0];
+    parts.push(wkLabel + joined);
+  });
+  return parts.join('; ');
+}
+
 // Recompute all composite fields in the currently-open case form
 function recomputeCompositeFields(journeyId) {
   var fields = getCaseFormForJourney(journeyId);
@@ -9232,6 +9383,7 @@ function renderProfileFieldInput(f, p) {
   if(f.type==='datetime') return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+(val.split(' ')[0]||'')+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
   if(f.type==='number') return label+'<input type="number" id="'+id+'" value="'+val.replace(/"/g,'&quot;')+'">';
   if(f.type==='composite') return label+'<input id="'+id+'" data-composite="'+(f.pattern||'').replace(/"/g,'&quot;')+'" value="'+val.replace(/"/g,'&quot;')+'" placeholder="Auto-fills from other fields" style="background:#FFFBF5;"><div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
+  if(f.type==='schedule') return label+'<div id="'+id+'_wrap">'+renderScheduleEditor(id, parseSchedule(val), '')+'</div>';
   if(f.type==='select'){var opts='<option value="">— Select —</option>'+(f.options||[]).map(function(o){return '<option value="'+o+'" '+(val===o?'selected':'')+'>'+o+'</option>';}).join('');
     var pIsDept = /\bdepartment\b|\bdept\b|\bteam\b/i.test(f.label||'');
     var pOnchg = pIsDept ? ' onchange="onDepartmentFieldChange(\''+f.id+'\',this.value)"' : '';
@@ -9732,6 +9884,15 @@ function openEditCase(caseId) {
       if (isPronounField(f.label)) return; // handled above
       const val = c._dynValues[f.id] || c._dynValues[f.label] || c._dynValues[f.label.toUpperCase()] || '';
       if (!val) return;
+      if (f.type === 'schedule') {
+        // Redraw the schedule editor with the saved value
+        var awardName = '';
+        var awardField = fields.find(function(x){ return x.type === 'award'; });
+        if (awardField) awardName = c._dynValues[awardField.id] || '';
+        var wrap = document.getElementById('cf_sched_wrap_' + f.id);
+        if (wrap) wrap.innerHTML = renderScheduleEditor('cf_input_' + f.id, parseSchedule(val), awardName);
+        return;
+      }
       const el = document.getElementById('cf_input_' + f.id);
       if (el) el.value = val;
     });
@@ -11140,6 +11301,7 @@ function renderSettings() {
     { id:'locations',       label:'Office Locations' },
     { id:'awards',          label:'Awards & Classifications' },
     { id:'candStages',      label:'Candidate Stages' },
+    { id:'schedPresets',    label:'Schedule Presets' },
     { id:'adviser',         label:'ER Adviser / Signatory' },
     { id:'appearance',      label:'Appearance' },
     { id:'tplDefaults',     label:'Template Defaults' },
@@ -11282,7 +11444,7 @@ function renderSettingsSection() {
   if (settingsSection === 'customFields') { settingsSection = 'caseFields'; }
   if (settingsSection === 'caseFields') {
     var lib = getFieldLib();
-    var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',composite:'Composite (combined fields)',location:'Location',manager:'Manager/Person',person:'Person',award:'Award',classification:'Classification'};
+    var typeLabels = {text:'Text',textarea:'Text Area',date:'Date',datetime:'Date & Time',number:'Number',yesno:'Yes/No',select:'Select',multiselect:'Multi-select',checklist:'Checklist',composite:'Composite (combined fields)',schedule:'Work Schedule',location:'Location',manager:'Manager/Person',person:'Person',award:'Award',classification:'Classification'};
     // Group fields
     var groups = [];
     lib.forEach(function(f){ var g=f.group||'General'; if(groups.indexOf(g)===-1) groups.push(g); });
@@ -11651,6 +11813,22 @@ function renderSettingsSection() {
     return;
   }
 
+  if (settingsSection === 'schedPresets') {
+    var presets = getSchedulePresets();
+    el.innerHTML = `<div class="settings-section">
+      <h3>Schedule Presets</h3>
+      <p>Reusable work-schedule patterns you can apply to any schedule field, then tweak per person. Create presets by building a schedule on any form and clicking "Save as preset".</p>
+      ${presets.length ? presets.map(function(p, i){
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+          + '<div><div style="font-size:13px;font-weight:600;">'+p.name+'</div>'
+          + '<div style="font-size:11.5px;color:var(--text3);">'+(renderScheduleSummary(p.schedule)||'—')+' · '+scheduleTotalPerWeek(p.schedule)+' hrs/wk</div></div>'
+          + '<button class="btn btn-sm" onclick="deleteSchedulePreset('+i+')" style="color:var(--red);">Delete</button>'
+          + '</div>';
+      }).join('') : '<p style="color:var(--text3);font-style:italic;font-size:13px;">No presets yet. Build a schedule on any form and click "Save as preset".</p>'}
+    </div>`;
+    return;
+  }
+
   if (settingsSection === 'candStages') {
     var stages = getCandidateStages();
     el.innerHTML = `<div class="settings-section">
@@ -11688,6 +11866,8 @@ function renderSettingsSection() {
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
               <input class="field-input" value="${(a.name||'').replace(/"/g,'&quot;')}" placeholder="Award / agreement name e.g. Manufacturing and Associated Industries Award"
                 oninput="updateAward(${i},'name',this.value)" style="font-weight:600;flex:1;">
+              <input class="field-input" type="number" step="0.5" value="${a.ordinaryHours||''}" placeholder="Ord. hrs/wk"
+                oninput="updateAward(${i},'ordinaryHours',this.value)" title="Ordinary hours per week — used to flag schedules that exceed it" style="width:110px;">
               <button class="list-del" onclick="deleteAward(${i})">✕</button>
             </div>
             <label style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);display:block;margin-bottom:4px;">Classification levels — one per line</label>
@@ -12300,6 +12480,7 @@ function renderCandidateField(f, c) {
   if(f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (val.split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (val.split(' ')[1]||'') + '" style="width:110px;"></div>';
   if(f.type === 'number') return label + '<input type="number" id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '">';
   if(f.type === 'composite') return label + '<input id="' + id + '" data-composite="' + (f.pattern||'').replace(/"/g,'&quot;') + '" value="' + val.replace(/"/g,'&quot;') + '" placeholder="Auto-fills from other fields" style="background:#FFFBF5;"><div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
+  if(f.type === 'schedule') return label + '<div id="' + id + '_wrap">' + renderScheduleEditor(id, parseSchedule(val), '') + '</div>';
 
   // Auto-detect date/datetime from field label
   var candNorm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
@@ -12554,6 +12735,90 @@ function saveCandidateStages(stages) {
   appSettings.candidateStages = stages.filter(Boolean);
   saveSettings();
 }
+
+// ── SCHEDULE PRESETS ──────────────────────────────────────────────────────
+function getSchedulePresets() { return appSettings.schedulePresets || []; }
+function saveSchedulePresets(presets) { appSettings.schedulePresets = presets; saveSettings(); }
+
+// Render an inline schedule editor. `inputId` is where the JSON value is stored (hidden input).
+function renderScheduleEditor(inputId, sched, awardName) {
+  sched = parseSchedule(sched);
+  var presets = getSchedulePresets();
+  var html = '<div class="sched-editor" data-sched-input="' + inputId + '" data-award="' + (awardName||'') + '" style="border:1px solid var(--border);border-radius:var(--r-sm);padding:10px;background:#FCFCFB;">';
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">';
+  html += '<select class="sched-pattern" onchange="schedSetPattern(\''+inputId+'\',this.value)" style="font-size:11px;padding:3px 6px;">'
+    + ['fixed','rotating','casual','compressed'].map(function(p){ return '<option value="'+p+'"'+(sched.pattern===p?' selected':'')+'>'+({fixed:'Fixed',rotating:'Rotating roster',casual:'Casual / as rostered',compressed:'Compressed week'})[p]+'</option>'; }).join('')
+    + '</select>';
+  if (presets.length) {
+    html += '<select onchange="if(this.value!==\'\')schedApplyPreset(\''+inputId+'\',this.value);this.value=\'\';" style="font-size:11px;padding:3px 6px;"><option value="">Apply preset…</option>'
+      + presets.map(function(p,i){ return '<option value="'+i+'">'+p.name+'</option>'; }).join('') + '</select>';
+  }
+  html += '<button type="button" onclick="schedAddWeek(\''+inputId+'\')" style="font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--r-sm);background:white;cursor:pointer;">+ Add week</button>';
+  html += '<button type="button" onclick="schedSaveAsPreset(\''+inputId+'\')" style="font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--r-sm);background:white;cursor:pointer;">Save as preset</button>';
+  html += '</div>';
+  html += '<div class="sched-weeks">';
+  (sched.weeks||[]).forEach(function(week, wi){
+    var multi = sched.weeks.length > 1;
+    html += '<div style="margin-bottom:'+(multi?'10px':'0')+';">';
+    if (multi) html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><span style="font-size:11px;font-weight:700;color:var(--text2);">Week '+(wi+1)+'</span><button type="button" onclick="schedRemoveWeek(\''+inputId+'\','+wi+')" style="font-size:10px;color:var(--red);background:none;border:none;cursor:pointer;">Remove</button></div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px;">';
+    SCHEDULE_DAYS.forEach(function(d){
+      var day = (week.days && week.days[d]) || null;
+      var active = !!day;
+      var hrs = day ? (day.hours != null ? day.hours : scheduleDayHours(day)) : '';
+      html += '<tr style="'+(active?'':'opacity:.5;')+'">'
+        + '<td style="padding:2px 6px 2px 0;width:44px;"><label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" '+(active?'checked':'')+' onchange="schedToggleDay(\''+inputId+'\','+wi+',\''+d+'\',this.checked)" style="accent-color:var(--teal);"> '+d+'</label></td>'
+        + '<td style="padding:2px 4px;"><input type="time" value="'+(day?day.start||'':'')+'" '+(active?'':'disabled')+' onchange="schedSetTime(\''+inputId+'\','+wi+',\''+d+'\',\'start\',this.value)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
+        + '<td style="padding:2px 4px;"><input type="time" value="'+(day?day.finish||'':'')+'" '+(active?'':'disabled')+' onchange="schedSetTime(\''+inputId+'\','+wi+',\''+d+'\',\'finish\',this.value)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
+        + '<td style="padding:2px 0 2px 4px;width:56px;"><input type="number" step="0.25" value="'+hrs+'" '+(active?'':'disabled')+' onchange="schedSetHours(\''+inputId+'\','+wi+',\''+d+'\',this.value)" title="Hours (auto, editable)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
+        + '</tr>';
+    });
+    html += '</table></div>';
+  });
+  html += '</div>';
+  html += '<input class="sched-notes" value="'+(sched.notes||'').replace(/"/g,'&quot;')+'" oninput="schedSetNotes(\''+inputId+'\',this.value)" placeholder="Notes (e.g. as rostered, times vary)" style="width:100%;box-sizing:border-box;font-size:11px;padding:4px 6px;margin-top:6px;">';
+  var total = scheduleTotalPerWeek(sched);
+  var awardFlag = '';
+  if (awardName) {
+    var aw = getAwards().find(function(a){ return a.name === awardName; });
+    if (aw && aw.ordinaryHours && total > +aw.ordinaryHours) {
+      awardFlag = '<span style="color:#B8791A;font-size:11px;margin-left:8px;">⚠ '+total+' hrs exceeds '+awardName+' ordinary hours ('+aw.ordinaryHours+')</span>';
+    }
+  }
+  html += '<div style="display:flex;align-items:center;margin-top:8px;padding-top:6px;border-top:1px solid var(--border);">'
+    + '<span style="font-size:11.5px;font-weight:600;color:var(--text2);">Total/week:</span> '
+    + '<input class="sched-total" type="number" step="0.25" value="'+total+'" onchange="schedSetTotalOverride(\''+inputId+'\',this.value)" title="Auto-summed — edit to override" style="width:60px;font-size:11.5px;padding:2px 4px;margin-left:6px;font-weight:700;color:var(--teal);">'
+    + awardFlag + '</div>';
+  html += '<input type="hidden" id="'+inputId+'" value=\''+JSON.stringify(sched).replace(/'/g,'&#39;')+'\'>';
+  html += '</div>';
+  return html;
+}
+
+function _schedGet(inputId) { var el=document.getElementById(inputId); return el?parseSchedule(el.value):emptySchedule(); }
+function _schedSet(inputId, sched) {
+  var el=document.getElementById(inputId); if(el) el.value=JSON.stringify(sched);
+  var wrap=document.querySelector('.sched-editor[data-sched-input="'+inputId+'"]');
+  if(wrap){
+    // Pull the current award value live from the form (for the compliance flag)
+    var awardName='';
+    var awardSel=document.querySelector('[data-award-field]');
+    if(awardSel) awardName=awardSel.value||'';
+    if(!awardName) awardName=wrap.getAttribute('data-award')||'';
+    wrap.outerHTML=renderScheduleEditor(inputId, sched, awardName);
+  }
+}
+function schedSetPattern(id, v){ var s=_schedGet(id); s.pattern=v; _schedSet(id,s); }
+function schedToggleDay(id, wi, d, on){ var s=_schedGet(id); if(!s.weeks[wi].days)s.weeks[wi].days={}; if(on){s.weeks[wi].days[d]={start:'09:00',finish:'17:00',hours:8};}else{delete s.weeks[wi].days[d];} s.totalOverride=null; _schedSet(id,s); }
+function schedSetTime(id, wi, d, field, v){ var s=_schedGet(id); if(s.weeks[wi].days[d]){s.weeks[wi].days[d][field]=v; s.weeks[wi].days[d].hours=scheduleDayHours(s.weeks[wi].days[d]);} s.totalOverride=null; _schedSet(id,s); }
+function schedSetHours(id, wi, d, v){ var s=_schedGet(id); if(s.weeks[wi].days[d])s.weeks[wi].days[d].hours=+v; s.totalOverride=null; _schedSet(id,s); }
+function schedSetNotes(id, v){ var el=document.getElementById(id); if(el){var s=parseSchedule(el.value); s.notes=v; el.value=JSON.stringify(s);} }
+function schedSetTotalOverride(id, v){ var s=_schedGet(id); s.totalOverride=(v===''?null:+v); var el=document.getElementById(id); if(el)el.value=JSON.stringify(s); }
+function schedAddWeek(id){ var s=_schedGet(id); s.weeks.push({days:{}}); _schedSet(id,s); }
+function schedRemoveWeek(id, wi){ var s=_schedGet(id); if(s.weeks.length>1)s.weeks.splice(wi,1); _schedSet(id,s); }
+function schedApplyPreset(id, presetIdx){ var p=getSchedulePresets()[presetIdx]; if(p&&p.schedule){_schedSet(id, JSON.parse(JSON.stringify(p.schedule)));} }
+function schedSaveAsPreset(id){ var name=prompt('Preset name (e.g. Standard Full-Time):'); if(!name)return; var presets=getSchedulePresets(); presets.push({name:name, schedule:_schedGet(id)}); saveSchedulePresets(presets); toast('Preset saved'); }
+function deleteSchedulePreset(idx){ var presets=getSchedulePresets(); presets.splice(idx,1); saveSchedulePresets(presets); renderSettingsSection(); toast('Preset deleted'); }
+
 
 function getEntityDisplayName(entity, fieldDefs) {
   if (!entity) return '';
