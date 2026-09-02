@@ -2795,8 +2795,18 @@ function renderTemplate(item) {
               <span style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;width:52px;">To</span>
               <input id="liveTo" value="${(item.to||'').replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k.trim()]||fieldValues[k.trim().toUpperCase()]||('{{'+k+'}}'))}"
                 oninput="updateLiveTo('${item.id}',this.value)"
-                style="flex:1;min-width:0;border:none;background:transparent;font-family:inherit;font-size:13px;color:var(--text);outline:none;" placeholder="{{EMPLOYEE NAME}}">
+                style="flex:1;min-width:0;border:none;background:transparent;font-family:inherit;font-size:13px;color:var(--text);outline:none;" placeholder="{{EMPLOYEE EMAIL}} — separate multiple with commas">
               <button onclick="subjOpenFieldPicker(event,'liveTo')" title="Insert field"
+                style="background:none;border:1px dashed var(--border);border-radius:3px;padding:1px 7px;font-size:10px;color:var(--text3);cursor:pointer;font-family:inherit;flex-shrink:0;"
+                onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'"
+                onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text3)'">+ Field</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);">
+              <span style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;flex-shrink:0;width:52px;">Cc</span>
+              <input id="liveCc" value="${(item.cc||'').replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k.trim()]||fieldValues[k.trim().toUpperCase()]||('{{'+k+'}}'))}"
+                oninput="updateLiveCc('${item.id}',this.value)"
+                style="flex:1;min-width:0;border:none;background:transparent;font-family:inherit;font-size:13px;color:var(--text);outline:none;" placeholder="Optional — separate multiple with commas">
+              <button onclick="subjOpenFieldPicker(event,'liveCc')" title="Insert field"
                 style="background:none;border:1px dashed var(--border);border-radius:3px;padding:1px 7px;font-size:10px;color:var(--text3);cursor:pointer;font-family:inherit;flex-shrink:0;"
                 onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'"
                 onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text3)'">+ Field</button>
@@ -2832,6 +2842,11 @@ function renderTemplate(item) {
                 <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Save .eml${(()=>{const atts=(item.blocks||[]).filter(b=>b.type==='attachments'&&b.enabled!==false).flatMap(b=>b.attachments||[]);return atts.length?` (${atts.length} att.)`:''})()}
               </button>
+              ${item.format === 'email' || !item.format ? `
+              <button class="btn btn-sm btn-ghost" onclick="openMergePicker('${item.id}')" title="Generate an individual email per person">
+                <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                Send to multiple
+              </button>` : ''}
               <button class="btn btn-sm btn-primary" onclick="copyOutputRich()" style="background:var(--teal);color:white;border-color:var(--teal);">
                 <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 Copy styled
@@ -2903,6 +2918,10 @@ function updateLiveSubject(tplId, val) {
 function updateLiveTo(tplId, val) {
   const item = data.templates.find(i => i.id === tplId);
   if (item) { item.to = val; updatePreview(tplId); }
+}
+function updateLiveCc(tplId, val) {
+  const item = data.templates.find(i => i.id === tplId);
+  if (item) { item.cc = val; updatePreview(tplId); }
 }
 
 function changeFormat(id, fmt) {
@@ -3483,6 +3502,90 @@ function openOutlook(id) {
   toast('Opening Outlook…');
 }
 
+// ── MAIL MERGE: one individualised .eml per selected person ────────────────
+var _mergeSelected = [];
+function openMergePicker(tplId) {
+  var people = getPeople();
+  if (!people.length) { alert('No people in your People list yet. Add people first, or use the candidate/talent-pool email actions.'); return; }
+  _mergeSelected = [];
+  var pfDefs = getProfileFields();
+  var rows = people.map(function(p){
+    var nm = getEntityDisplayName(p, pfDefs) || 'Unnamed';
+    var email = p.pf_email || '';
+    return '<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:5px;">'
+      + '<input type="checkbox" class="merge-check" data-pid="'+p.id+'" style="accent-color:var(--teal);width:16px;height:16px;" onchange="updateMergeCount()">'
+      + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+nm+'</div>'
+      + '<div style="font-size:11px;color:var(--text3);">'+(email||'<span style="color:var(--red);">no email</span>')+(p.pf_position?' · '+p.pf_position:'')+'</div></div>'
+      + '</label>';
+  }).join('');
+  var html = '<div class="overlay open" id="mergeModal" style="z-index:10000;"><div class="modal" style="width:480px;max-height:85vh;display:flex;flex-direction:column;">'
+    + '<div class="modal-title">Send to multiple — individual emails</div>'
+    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 10px;">Each selected person gets their own .eml file, personalised from their profile (e.g. "Hi {{PREFERRED NAME}}" fills with their name).</p>'
+    + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+    + '<input id="mergeSearch" placeholder="Search people…" oninput="filterMergeList(this.value)" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12.5px;">'
+    + '<button class="btn btn-sm" onclick="toggleAllMerge(true)">All</button>'
+    + '<button class="btn btn-sm" onclick="toggleAllMerge(false)">None</button>'
+    + '</div>'
+    + '<div id="mergeList" style="flex:1;overflow-y:auto;margin-bottom:10px;">'+rows+'</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:10px;">'
+    + '<span id="mergeCount" style="font-size:12px;font-weight:600;color:var(--teal);">0 selected</span>'
+    + '<div style="display:flex;gap:8px;"><button class="btn" onclick="document.getElementById(\'mergeModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="runMergeEmail(\''+tplId+'\')">Generate emails</button></div>'
+    + '</div></div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function updateMergeCount() {
+  var n = document.querySelectorAll('.merge-check:checked').length;
+  var el = document.getElementById('mergeCount'); if (el) el.textContent = n + ' selected';
+}
+function toggleAllMerge(on) {
+  document.querySelectorAll('.merge-check').forEach(function(cb){ if(cb.closest('label').style.display !== 'none') cb.checked = on; });
+  updateMergeCount();
+}
+function filterMergeList(q) {
+  q = (q||'').toLowerCase();
+  document.querySelectorAll('#mergeList label').forEach(function(l){
+    l.style.display = l.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+function runMergeEmail(tplId) {
+  var tpl = data.templates.find(function(t){ return t.id === tplId; });
+  if (!tpl) return;
+  var pids = Array.from(document.querySelectorAll('.merge-check:checked')).map(function(cb){ return cb.getAttribute('data-pid'); });
+  if (!pids.length) { alert('Select at least one person.'); return; }
+  var people = getPeople();
+  var pfDefs = getProfileFields();
+  // Rehydrate attachments once (same for every recipient)
+  var blocks = (tpl.blocks || []);
+  var atts = blocks.filter(function(b){ return b.type === 'attachments' && b.enabled !== false; })
+    .flatMap(function(b){ return (b.attachments||[]); })
+    .map(function(a){ var du = a.dataUrl || (a.pdfId ? getPdfUrl(a.pdfId) : ''); return du ? Object.assign({}, a, {dataUrl:du}) : null; })
+    .filter(Boolean);
+
+  var saved = fieldValues;
+  var count = 0;
+  pids.forEach(function(pid, idx) {
+    var p = people.find(function(x){ return x.id === pid; });
+    if (!p) return;
+    fieldValues = resolveEntityFields(p, 'people');
+    var subj = (tpl.subject || tpl.name || '').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+    var bodyHtml = outlookBody(tpl, true);
+    var bodyText = bodyHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+    var to = p.pf_email || fieldValues['EMAIL'] || '';
+    var nm = getEntityDisplayName(p, pfDefs) || 'recipient';
+    // Also resolve a Cc if the template has one
+    var cc = '';
+    if (tpl.cc && tpl.cc.trim()) cc = tpl.cc.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+    setTimeout(function(){
+      buildAndDownloadEml(nm + ' - ' + tpl.name, subj, bodyText, bodyHtml, atts, to, cc);
+    }, idx * 400);
+    count++;
+  });
+  fieldValues = saved;
+  document.getElementById('mergeModal').remove();
+  toast('Generating ' + count + ' individual email' + (count>1?'s':'') + '…');
+}
+
 function downloadOft(id) {
   const item = data.templates.find(i => i.id === id);
   if (!item) { toast('Template not found'); return; }
@@ -3490,29 +3593,50 @@ function downloadOft(id) {
   const bodyHtml = outlookBody(item, true); // forSend=true strips preview chrome (To/Re)
   const bodyText = document.getElementById('outputPreview')?.innerText || getRawText(item.body||'');
 
-  // Resolve the "To" recipient — from the template's To field, filled with current values
+  // Resolve the "To" recipient(s) — supports multiple comma-separated addresses
   let toAddr = '';
   if (item.to && item.to.trim()) {
     toAddr = item.to.replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k.trim()] || fieldValues[k.trim().toUpperCase()] || '');
   }
   if (!toAddr) toAddr = fieldValues['EMAIL'] || fieldValues['EMPLOYEE EMAIL'] || '';
+  // Resolve Cc
+  let ccAddr = '';
+  if (item.cc && item.cc.trim()) {
+    ccAddr = item.cc.replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k.trim()] || fieldValues[k.trim().toUpperCase()] || '');
+  }
 
   const blocks = (beBlocks && beBlocks.length) ? beBlocks : (item.blocks || []);
   const allAtts = blocks
     .filter(b => b.type === 'attachments' && b.enabled !== false)
-    .flatMap(b => (b.attachments || []).filter(a => a.dataUrl));
+    .flatMap(b => (b.attachments || []))
+    .map(a => {
+      // Rehydrate dataUrl from the store if it was stripped for storage
+      var dataUrl = a.dataUrl || (a.pdfId ? getPdfUrl(a.pdfId) : '');
+      return dataUrl ? Object.assign({}, a, { dataUrl: dataUrl }) : null;
+    })
+    .filter(Boolean);
 
-  buildAndDownloadEml(item.name, subject, bodyText, bodyHtml, allAtts, toAddr);
+  if (blocks.some(b => b.type === 'attachments' && b.enabled !== false && (b.attachments||[]).length) && !allAtts.length) {
+    toast('Attachments could not be loaded — try re-uploading them');
+  }
+
+  buildAndDownloadEml(item.name, subject, bodyText, bodyHtml, allAtts, toAddr, ccAddr);
 }
 
-function buildAndDownloadEml(name, subject, bodyText, bodyHtml, attachments, toAddr) {
+function buildAndDownloadEml(name, subject, bodyText, bodyHtml, attachments, toAddr, ccAddr) {
   const boundary = '----=_ERAdviser_' + Date.now();
   const altBoundary = '----=_ERAdviserAlt_' + Date.now();
+
+  // Normalize recipient lists: trim each, drop empties, join with ", "
+  const normAddrs = (s) => (s||'').split(/[,;]+/).map(x => x.trim()).filter(Boolean).join(', ');
+  const toClean = normAddrs(toAddr);
+  const ccClean = normAddrs(ccAddr);
 
   const lines = [
     'MIME-Version: 1.0',
   ];
-  if (toAddr && toAddr.trim()) lines.push(`To: ${toAddr.trim()}`);
+  if (toClean) lines.push(`To: ${toClean}`);
+  if (ccClean) lines.push(`Cc: ${ccClean}`);
   lines.push(`Subject: ${subject}`);
   lines.push('X-Unsent: 1');
 
@@ -5267,7 +5391,7 @@ function exportToExcel() {
   };
 
   var dsRows = [];
-  ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases'].forEach(function(k) {
+  ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases','er_talent_pool'].forEach(function(k) {
     var def = (k === 'er_journey_steps' || k === 'er_candidates') ? '{}' : '[]';
     blobToRows(k, localStorage.getItem(k) || def).forEach(function(r){ dsRows.push(r); });
   });
@@ -5489,7 +5613,7 @@ function importFromExcel(file) {
       // ── DataStores blobs (chunk-aware) ────────────────────────────────
       if (wb.SheetNames.includes('DataStores')) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets['DataStores'], { defval:'' });
-        ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases'].forEach(function(k) {
+        ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases','er_talent_pool'].forEach(function(k) {
           var val = reassembleBlob(rows, k);
           if (val) {
             try { JSON.parse(val); localStorage.setItem(k, val); }
@@ -10099,8 +10223,8 @@ function generateFromCase(tplId, caseId) {
       if (c.hrbp) fieldValues['HR CONTACT'] = c.hrbp;
       if (c.startDate) { fieldValues['START DATE'] = c.startDate; fieldValues['COMMENCEMENT DATE'] = c.startDate; }
       if (c.endDate) fieldValues['CONTRACT END DATE'] = c.endDate;
-      if (c.hours) fieldValues['ORDINARY HOURS'] = c.hours;
-      if (c.schedule) fieldValues['WORK SCHEDULE'] = c.schedule;
+      if (c.hours && !fieldValues['ORDINARY HOURS']) fieldValues['ORDINARY HOURS'] = c.hours;
+      if (c.schedule && typeof c.schedule === 'string' && c.schedule.charAt(0) !== '{' && !fieldValues['WORK SCHEDULE']) fieldValues['WORK SCHEDULE'] = c.schedule;
       if (c.probation) fieldValues['PROBATION PERIOD'] = c.probation;
       if (c.payrollId) fieldValues['EMPLOYEE ID'] = c.payrollId;
       if (c.notes) fieldValues['NOTES'] = c.notes;
@@ -10173,6 +10297,16 @@ function generateFromCase(tplId, caseId) {
           // Library field — resolve via getFieldByAnyId (handles fid, alias, label)
           var def = getFieldByAnyId(fid);
           var label = def ? def.label : String(fid).replace(/^(?:cf|fl|pf)_/, '').replace(/_/g, ' ');
+          // Schedule fields: render the JSON to table / summary / hours, not raw JSON
+          if (def && def.type === 'schedule') {
+            var sched = parseSchedule(val);
+            fieldValues[label.toUpperCase()] = renderScheduleTable(sched);
+            fieldValues[label.toUpperCase() + ' SUMMARY'] = renderScheduleSummary(sched);
+            fieldValues['WORK SCHEDULE'] = renderScheduleTable(sched);
+            fieldValues['WORK SCHEDULE SUMMARY'] = renderScheduleSummary(sched);
+            fieldValues['ORDINARY HOURS'] = String(scheduleTotalPerWeek(sched));
+            return;
+          }
           fieldValues[label.toUpperCase()] = formatted;
           fieldValues[label] = formatted;
         });
@@ -12190,6 +12324,50 @@ function saveCandidates(pipelineItemId, candidates) {
   } catch(e) {}
 }
 
+// ── TALENT POOL (role-independent — people you liked, kept for future contact) ──
+function getTalentPool() {
+  try { return JSON.parse(localStorage.getItem('er_talent_pool') || '[]'); }
+  catch(e) { return []; }
+}
+function saveTalentPool(pool) {
+  localStorage.setItem('er_talent_pool', JSON.stringify(pool));
+  fsSet('talentPool', 'main', pool);
+}
+
+// Add a candidate to the pool (keeps them in the role too). Captures details + role context.
+function addCandidateToPool(roleId, candId) {
+  var cand = getCandidates(roleId).find(function(x){ return x.id === candId; });
+  if (!cand) { toast('Candidate not found'); return; }
+  var pool = getTalentPool();
+  // Avoid duplicates by candidate id
+  if (pool.some(function(p){ return p._fromCandidate === candId; })) { toast('Already in the talent pool'); return; }
+  var role = loadPipeline().find(function(x){ return x.id === roleId; });
+  var name = getEntityDisplayName(cand, getCandidateFields()) || 'Candidate';
+  var note = prompt('Add a note about ' + name + ' (why you liked them, what roles they suit):', '');
+  if (note === null) return; // cancelled
+  var tagsRaw = prompt('Tags (comma-separated, e.g. Finance, Senior, Perth):', '');
+  var tags = tagsRaw ? tagsRaw.split(',').map(function(t){ return t.trim(); }).filter(Boolean) : [];
+  var entry = Object.assign({}, cand, {
+    id: 'tp' + Date.now(),
+    _fromCandidate: candId,
+    _fromRole: roleId,
+    _roleContext: role ? (role.position || '') : '',
+    _pooledDate: todayStr(),
+    _poolNote: note || '',
+    _poolTags: tags
+  });
+  pool.push(entry);
+  saveTalentPool(pool);
+  toast('★ ' + name + ' added to talent pool');
+}
+
+function removeFromPool(poolId) {
+  if (!confirm('Remove this person from the talent pool?')) return;
+  saveTalentPool(getTalentPool().filter(function(p){ return p.id !== poolId; }));
+  renderTalentPool();
+  toast('Removed from pool');
+}
+
 // Set a candidate's stage
 function setCandidateStage(roleId, candId, stage) {
   var cands = getCandidates(roleId);
@@ -12576,21 +12754,24 @@ function savePipeline(items) {
 }
 
 var pipelineView = 'kanban'; // 'kanban' | 'list'
+var recruitmentView = 'pipeline'; // 'pipeline' | 'pool'
 var selectedPipelineId = null;
 
 function renderRecruitment() {
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('mainContent').style.display = 'block';
+  if (recruitmentView === 'pool') { renderTalentPool(); return; }
   const allItems = loadPipeline();
   const items = allItems.filter(function(x){ return !x.archived; });
   const archivedCount = allItems.length - items.length;
+  const poolCount = getTalentPool().length;
   const mc = document.getElementById('mainContent');
 
   mc.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
       <div>
         <h2 style="font-size:19px;font-weight:600;letter-spacing:-.3px;">Recruitment Pipeline</h2>
-        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${items.length} open position${items.length!==1?'s':''}${archivedCount?` · <a href="#" onclick="showArchivedRoles();return false;" style="color:var(--text3);">${archivedCount} archived</a>`:''}</p>
+        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${items.length} open position${items.length!==1?'s':''}${archivedCount?` · <a href="#" onclick="showArchivedRoles();return false;" style="color:var(--text3);">${archivedCount} archived</a>`:''} · <a href="#" onclick="recruitmentView='pool';renderRecruitment();return false;" style="color:var(--teal);">★ Talent Pool${poolCount?' ('+poolCount+')':''}</a></p>
       </div>
       <div style="display:flex;gap:8px;">
         <div style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;">
@@ -12613,6 +12794,137 @@ function renderRecruitment() {
 
   if (pipelineView === 'kanban') renderKanban(items);
   else renderPipelineList(items);
+}
+
+var talentPoolQ = '';
+function renderTalentPool() {
+  var mc = document.getElementById('mainContent');
+  var pool = getTalentPool();
+  var candDefs = getCandidateFields();
+  var q = (talentPoolQ||'').toLowerCase();
+  var filtered = q ? pool.filter(function(p){
+    var name = getEntityDisplayName(p, candDefs).toLowerCase();
+    var tags = (p._poolTags||[]).join(' ').toLowerCase();
+    var note = (p._poolNote||'').toLowerCase();
+    var ctx = (p._roleContext||'').toLowerCase();
+    return name.includes(q) || tags.includes(q) || note.includes(q) || ctx.includes(q);
+  }) : pool;
+
+  // Collect all tags for quick filters
+  var allTags = {};
+  pool.forEach(function(p){ (p._poolTags||[]).forEach(function(t){ allTags[t] = (allTags[t]||0)+1; }); });
+  var tagChips = Object.keys(allTags).sort().map(function(t){
+    return '<button onclick="talentPoolQ=\''+t.replace(/'/g,"\\'")+'\';renderTalentPool()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border);background:white;border-radius:12px;cursor:pointer;color:var(--text2);">'+t+' <span style="color:var(--text3);">'+allTags[t]+'</span></button>';
+  }).join('');
+
+  mc.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div>
+        <h2 style="font-size:19px;font-weight:600;letter-spacing:-.3px;">★ Talent Pool</h2>
+        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${pool.length} ${pool.length===1?'person':'people'} you'd like to stay in touch with · <a href="#" onclick="recruitmentView='pipeline';renderRecruitment();return false;" style="color:var(--teal);">← Back to pipeline</a></p>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+      <input id="poolSearch" value="${(talentPoolQ||'').replace(/"/g,'&quot;')}" placeholder="Search name, tag, note or role…" oninput="talentPoolQ=this.value;_poolSearchDebounce()" style="flex:1;min-width:220px;padding:7px 11px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;font-size:13px;">
+      ${talentPoolQ?`<button onclick="talentPoolQ='';renderTalentPool()" style="font-size:12px;padding:6px 10px;border:1px solid var(--border);background:white;border-radius:var(--r-sm);cursor:pointer;color:var(--text2);">Clear</button>`:''}
+    </div>
+    ${tagChips?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${tagChips}</div>`:''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">
+      ${filtered.length ? filtered.map(function(p){
+        var name = getEntityDisplayName(p, candDefs) || 'Unnamed';
+        var initials = (name||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
+        var email = p.cand_email || '';
+        return `<div style="background:white;border:1px solid var(--border);border-radius:var(--r-lg);padding:14px 16px;">
+          <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">
+            <div style="width:36px;height:36px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;">${initials}</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:14px;font-weight:700;color:var(--text);">${name}</div>
+              <div style="font-size:11.5px;color:var(--text3);">${[email, p._roleContext?'Applied: '+p._roleContext:''].filter(Boolean).join(' · ')}</div>
+            </div>
+            <button onclick="removeFromPool('${p.id}')" title="Remove from pool" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:15px;line-height:1;">×</button>
+          </div>
+          ${p._poolNote?`<div style="font-size:12px;color:var(--text2);background:var(--bg);padding:7px 9px;border-radius:var(--r-sm);margin-bottom:8px;line-height:1.5;">${p._poolNote}</div>`:''}
+          ${(p._poolTags||[]).length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">${p._poolTags.map(function(t){return '<span style="font-size:10.5px;padding:1px 8px;background:var(--teal-lt);color:var(--teal);border-radius:10px;">'+t+'</span>';}).join('')}</div>`:''}
+          <div style="display:flex;gap:6px;">
+            <button onclick="poolAddToRole('${p.id}')" style="flex:1;font-size:11.5px;padding:6px;border:1px solid var(--teal);background:var(--teal);color:white;border-radius:var(--r-sm);cursor:pointer;">+ Add to role</button>
+            <button onclick="poolEmail('${p.id}')" style="flex:1;font-size:11.5px;padding:6px;border:1px solid var(--border);background:white;color:var(--text2);border-radius:var(--r-sm);cursor:pointer;">✉ Email</button>
+          </div>
+          <div style="font-size:10px;color:var(--text3);margin-top:6px;">Pooled ${p._pooledDate||''}</div>
+        </div>`;
+      }).join('') : `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text3);">
+        <div style="font-size:32px;margin-bottom:8px;">★</div>
+        <div style="font-size:14px;">${pool.length?'No matches for "'+talentPoolQ+'"':'No one in the talent pool yet.'}</div>
+        ${!pool.length?'<div style="font-size:12.5px;margin-top:4px;">Add strong candidates from any role with the ★ Pool button.</div>':''}
+      </div>`}
+    </div>`;
+  var si = document.getElementById('poolSearch');
+  if (si) { si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
+}
+var _poolSearchTimer = null;
+function _poolSearchDebounce() { clearTimeout(_poolSearchTimer); _poolSearchTimer = setTimeout(renderTalentPool, 250); }
+
+// Add a pooled person to a role (re-activate as a candidate)
+function poolAddToRole(poolId) {
+  var person = getTalentPool().find(function(p){ return p.id === poolId; });
+  if (!person) return;
+  var openRoles = loadPipeline().filter(function(r){ return !r.archived; });
+  if (!openRoles.length) { alert('No open roles. Create a Position Request first.'); return; }
+  var html = '<div class="overlay open" id="poolRoleModal" style="z-index:10000;"><div class="modal" style="width:420px;">'
+    + '<div class="modal-title">Add ' + (getEntityDisplayName(person, getCandidateFields())||'candidate') + ' to a role</div>'
+    + '<div class="form-field"><label>Role</label><select id="poolRoleSel">'
+    + openRoles.map(function(r){ return '<option value="'+r.id+'">'+(r.position||'Untitled')+'</option>'; }).join('')
+    + '</select></div>'
+    + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'poolRoleModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="poolConfirmAddToRole(\''+poolId+'\')">Add as candidate</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function poolConfirmAddToRole(poolId) {
+  var person = getTalentPool().find(function(p){ return p.id === poolId; });
+  var roleId = document.getElementById('poolRoleSel').value;
+  if (!person || !roleId) return;
+  var cands = getCandidates(roleId);
+  // Clone the pooled person as a fresh candidate on this role
+  var newCand = Object.assign({}, person, { id: 'cand'+Date.now(), cand_stage: 'Applied', _fromPool: poolId });
+  delete newCand._poolNote; delete newCand._poolTags; delete newCand._pooledDate; delete newCand._roleContext;
+  cands.push(newCand);
+  saveCandidates(roleId, cands);
+  document.getElementById('poolRoleModal').remove();
+  toast('Added to role as a candidate');
+}
+
+// Email a pooled person from a template (single individualised .eml)
+function poolEmail(poolId) {
+  var person = getTalentPool().find(function(p){ return p.id === poolId; });
+  if (!person) return;
+  var emailTemplates = data.templates.filter(function(t){ return t.format === 'email' || t.format === 'letter'; });
+  if (!emailTemplates.length) { alert('No email/letter templates available.'); return; }
+  var html = '<div class="overlay open" id="poolEmailModal" style="z-index:10000;"><div class="modal" style="width:420px;">'
+    + '<div class="modal-title">Email ' + (getEntityDisplayName(person, getCandidateFields())||'candidate') + '</div>'
+    + '<div class="form-field"><label>Template</label><select id="poolEmailTpl">'
+    + emailTemplates.map(function(t){ return '<option value="'+t.id+'">'+t.name+'</option>'; }).join('')
+    + '</select></div>'
+    + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'poolEmailModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="poolRunEmail(\''+poolId+'\')">Generate .eml</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function poolRunEmail(poolId) {
+  var person = getTalentPool().find(function(p){ return p.id === poolId; });
+  var tplId = document.getElementById('poolEmailTpl').value;
+  var tpl = data.templates.find(function(t){ return t.id === tplId; });
+  if (!person || !tpl) return;
+  var saved = fieldValues;
+  fieldValues = resolveEntityFields(person, 'candidate');
+  var subj = (tpl.subject || tpl.name || '').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+  var bodyHtml = outlookBody(tpl, true);
+  var bodyText = bodyHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  var to = person.cand_email || fieldValues['EMAIL'] || '';
+  var nm = getEntityDisplayName(person, getCandidateFields()) || 'candidate';
+  buildAndDownloadEml(nm + ' - ' + tpl.name, subj, bodyText, bodyHtml, [], to);
+  fieldValues = saved;
+  document.getElementById('poolEmailModal').remove();
+  toast('Email generated');
 }
 
 function showArchivedRoles() {
@@ -12899,6 +13211,7 @@ function openPipelineDetail(id) {
       + '<div style="font-size:11.5px;color:var(--text3);">'+[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:''].filter(Boolean).join(' · ')+'</div>'
       + '</div>'
       + '<select onchange="setCandidateStage(\''+id+'\',\''+c.id+'\',this.value)" onclick="event.stopPropagation()" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);background:white;cursor:pointer;">'+stageOpts+'</select>'
+      + '<button onclick="event.stopPropagation();addCandidateToPool(\''+id+'\',\''+c.id+'\')" title="Add to talent pool" style="font-size:11px;padding:4px 8px;border:1px solid var(--border);background:white;color:var(--text2);border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">★ Pool</button>'
       + '<button onclick="event.stopPropagation();confirmProgressToOnboarding(\''+id+'\',\''+c.id+'\')" title="Progress to onboarding" style="font-size:11px;padding:4px 8px;border:1px solid var(--teal);background:var(--teal);color:white;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">→ Onboard</button>'
       + '</div>';
   }
