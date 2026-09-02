@@ -2102,8 +2102,19 @@ function loadData() {
   }
   const kbData = safeParse('er_au_kb', DEFAULT_KB);
   kbData.forEach(entry => rehydratePdfs(entry.pdfs||[]));
+  const tplData = safeParse('er_au_tpls', DEFAULT_TEMPLATES);
+  // Rehydrate template block attachments into pdfStore so .eml downloads find their file data
+  tplData.forEach(function(t){
+    (t.blocks||[]).forEach(function(b){
+      if (b.type === 'attachments') {
+        (b.attachments||[]).forEach(function(a){
+          if (a.pdfId && a.dataUrl) pdfStore.set(a.pdfId, a.dataUrl);
+        });
+      }
+    });
+  });
   return {
-    templates:   safeParse('er_au_tpls', DEFAULT_TEMPLATES),
+    templates:   tplData,
     kb:          kbData,
     legislation: safeParse('er_au_leg', DEFAULT_LEGISLATION),
   };
@@ -3504,25 +3515,76 @@ function openOutlook(id) {
 
 // ── MAIL MERGE: one individualised .eml per selected person ────────────────
 var _mergeSelected = [];
-function openMergePicker(tplId) {
-  var people = getPeople();
-  if (!people.length) { alert('No people in your People list yet. Add people first, or use the candidate/talent-pool email actions.'); return; }
-  _mergeSelected = [];
+// Gather selectable recipients from People, candidates (all roles), and case employees
+function gatherMergeRecipients() {
+  var out = [];
+  var seen = {};
   var pfDefs = getProfileFields();
-  var rows = people.map(function(p){
+  var candDefs = getCandidateFields();
+  // People
+  getPeople().forEach(function(p){
     var nm = getEntityDisplayName(p, pfDefs) || 'Unnamed';
     var email = p.pf_email || '';
-    return '<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:5px;">'
-      + '<input type="checkbox" class="merge-check" data-pid="'+p.id+'" style="accent-color:var(--teal);width:16px;height:16px;" onchange="updateMergeCount()">'
-      + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+nm+'</div>'
-      + '<div style="font-size:11px;color:var(--text3);">'+(email||'<span style="color:var(--red);">no email</span>')+(p.pf_position?' · '+p.pf_position:'')+'</div></div>'
-      + '</label>';
-  }).join('');
+    var key = (nm+'|'+email).toLowerCase();
+    if (seen[key]) return; seen[key] = 1;
+    out.push({ kind:'person', id:p.id, name:nm, email:email, sub:(p.pf_position||''), entity:p, entityType:'people' });
+  });
+  // Candidates across all roles
+  var allCands = getCandidates();
+  Object.keys(allCands||{}).forEach(function(roleId){
+    (allCands[roleId]||[]).forEach(function(c){
+      var nm = getEntityDisplayName(c, candDefs) || 'Unnamed';
+      var email = c.cand_email || '';
+      var key = (nm+'|'+email).toLowerCase();
+      if (seen[key]) return; seen[key] = 1;
+      out.push({ kind:'candidate', id:c.id, name:nm, email:email, sub:'Candidate', entity:c, entityType:'candidate' });
+    });
+  });
+  // Talent pool
+  getTalentPool().forEach(function(p){
+    var nm = getEntityDisplayName(p, candDefs) || 'Unnamed';
+    var email = p.cand_email || '';
+    var key = (nm+'|'+email).toLowerCase();
+    if (seen[key]) return; seen[key] = 1;
+    out.push({ kind:'pool', id:p.id, name:nm, email:email, sub:'Talent pool', entity:p, entityType:'candidate' });
+  });
+  // Case employees
+  loadCases().forEach(function(c){
+    var nm = c.employee || '';
+    if (!nm) return;
+    var email = (c._dynValues && (c._dynValues['EMAIL'] || c._dynValues['Email'])) || '';
+    var key = (nm+'|'+email).toLowerCase();
+    if (seen[key]) return; seen[key] = 1;
+    out.push({ kind:'case', id:c.id, name:nm, email:email, sub:'Case', entity:c, entityType:'case' });
+  });
+  return out;
+}
+
+var _mergeRecipients = [];
+function openMergePicker(tplId) {
+  _mergeRecipients = gatherMergeRecipients();
+  if (!_mergeRecipients.length) { alert('No people found in People, candidates, talent pool, or cases yet.'); return; }
+  _mergeSelected = [];
+  var groups = { person:[], candidate:[], pool:[], case:[] };
+  _mergeRecipients.forEach(function(r, i){ groups[r.kind].push(Object.assign({_i:i}, r)); });
+  var groupLabels = { person:'People', candidate:'Candidates', pool:'Talent Pool', case:'Cases' };
+  var rows = '';
+  ['person','candidate','pool','case'].forEach(function(g){
+    if (!groups[g].length) return;
+    rows += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin:8px 0 4px;">'+groupLabels[g]+' ('+groups[g].length+')</div>';
+    rows += groups[g].map(function(r){
+      return '<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:5px;">'
+        + '<input type="checkbox" class="merge-check" data-idx="'+r._i+'" style="accent-color:var(--teal);width:16px;height:16px;" onchange="updateMergeCount()">'
+        + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+r.name+'</div>'
+        + '<div style="font-size:11px;color:var(--text3);">'+(r.email||'<span style="color:var(--red);">no email</span>')+(r.sub?' · '+r.sub:'')+'</div></div>'
+        + '</label>';
+    }).join('');
+  });
   var html = '<div class="overlay open" id="mergeModal" style="z-index:10000;"><div class="modal" style="width:480px;max-height:85vh;display:flex;flex-direction:column;">'
     + '<div class="modal-title">Send to multiple — individual emails</div>'
-    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 10px;">Each selected person gets their own .eml file, personalised from their profile (e.g. "Hi {{PREFERRED NAME}}" fills with their name).</p>'
+    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 10px;">Each selected person gets their own .eml file, personalised from their record (e.g. "Hi {{PREFERRED NAME}}" fills with their name).</p>'
     + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
-    + '<input id="mergeSearch" placeholder="Search people…" oninput="filterMergeList(this.value)" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12.5px;">'
+    + '<input id="mergeSearch" placeholder="Search…" oninput="filterMergeList(this.value)" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12.5px;">'
     + '<button class="btn btn-sm" onclick="toggleAllMerge(true)">All</button>'
     + '<button class="btn btn-sm" onclick="toggleAllMerge(false)">None</button>'
     + '</div>'
@@ -3551,10 +3613,8 @@ function filterMergeList(q) {
 function runMergeEmail(tplId) {
   var tpl = data.templates.find(function(t){ return t.id === tplId; });
   if (!tpl) return;
-  var pids = Array.from(document.querySelectorAll('.merge-check:checked')).map(function(cb){ return cb.getAttribute('data-pid'); });
-  if (!pids.length) { alert('Select at least one person.'); return; }
-  var people = getPeople();
-  var pfDefs = getProfileFields();
+  var idxs = Array.from(document.querySelectorAll('.merge-check:checked')).map(function(cb){ return +cb.getAttribute('data-idx'); });
+  if (!idxs.length) { alert('Select at least one recipient.'); return; }
   // Rehydrate attachments once (same for every recipient)
   var blocks = (tpl.blocks || []);
   var atts = blocks.filter(function(b){ return b.type === 'attachments' && b.enabled !== false; })
@@ -3564,21 +3624,19 @@ function runMergeEmail(tplId) {
 
   var saved = fieldValues;
   var count = 0;
-  pids.forEach(function(pid, idx) {
-    var p = people.find(function(x){ return x.id === pid; });
-    if (!p) return;
-    fieldValues = resolveEntityFields(p, 'people');
+  idxs.forEach(function(idx, i) {
+    var r = _mergeRecipients[idx];
+    if (!r) return;
+    fieldValues = resolveEntityFields(r.entity, r.entityType);
     var subj = (tpl.subject || tpl.name || '').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
     var bodyHtml = outlookBody(tpl, true);
     var bodyText = bodyHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-    var to = p.pf_email || fieldValues['EMAIL'] || '';
-    var nm = getEntityDisplayName(p, pfDefs) || 'recipient';
-    // Also resolve a Cc if the template has one
+    var to = r.email || fieldValues['EMAIL'] || '';
     var cc = '';
     if (tpl.cc && tpl.cc.trim()) cc = tpl.cc.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
     setTimeout(function(){
-      buildAndDownloadEml(nm + ' - ' + tpl.name, subj, bodyText, bodyHtml, atts, to, cc);
-    }, idx * 400);
+      buildAndDownloadEml(r.name + ' - ' + tpl.name, subj, bodyText, bodyHtml, atts, to, cc);
+    }, i * 400);
     count++;
   });
   fieldValues = saved;
@@ -4903,6 +4961,31 @@ function applyInheritanceRules(childEntity, childType, parentEntity, parentType)
 function resolveEntityFields(entity, entityType) {
   if (!entity) return {};
   var values = {};
+
+  // Cases store their values in _dynValues keyed by field id — map to labels
+  if (entityType === 'case') {
+    var lib = getFieldLib();
+    if (entity._dynValues) {
+      Object.keys(entity._dynValues).forEach(function(fid){
+        var v = entity._dynValues[fid];
+        if (v === undefined || v === null || v === '') return;
+        var def = getFieldByAnyId(fid);
+        var formatted = Array.isArray(v) ? v.join(', ') : String(v);
+        if (def && def.type === 'schedule') {
+          var sched = parseSchedule(v);
+          values[(def.label||'').toUpperCase()] = renderScheduleTable(sched);
+          values['WORK SCHEDULE'] = renderScheduleTable(sched);
+          values['WORK SCHEDULE SUMMARY'] = renderScheduleSummary(sched);
+          values['ORDINARY HOURS'] = String(scheduleTotalPerWeek(sched));
+          return;
+        }
+        if (def) { values[(def.label||'').toUpperCase()] = formatted; values[def.label] = formatted; }
+        else values[String(fid).toUpperCase()] = formatted;
+      });
+    }
+    if (entity.employee) { values['EMPLOYEE NAME'] = entity.employee; values['NAME'] = entity.employee; }
+    return values;
+  }
 
   // Get the field definitions for this entity type so we can map ID → label
   var fieldDefs = [];
