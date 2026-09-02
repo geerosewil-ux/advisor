@@ -2049,6 +2049,23 @@ async function loadFromFirestore() {
     if (qbs) { localStorage.setItem('er_quick_blocks', JSON.stringify(qbs)); changed = true; }
     const cands = await fsGet('candidates');
     if (cands) { localStorage.setItem('er_candidates', JSON.stringify(cands)); changed = true; }
+    // People, cases, talent pool — only restore from cloud when cloud actually has data,
+    // and never overwrite a non-empty local store with an empty cloud one (prevents data loss).
+    const cloudPeople = await fsGet('people');
+    if (Array.isArray(cloudPeople) && cloudPeople.length) {
+      var localPeople = []; try { localPeople = JSON.parse(localStorage.getItem('er_people')||'[]'); } catch(e){}
+      if (cloudPeople.length >= localPeople.length) { localStorage.setItem('er_people', JSON.stringify(cloudPeople)); changed = true; }
+    }
+    const cloudCases = await fsGet('cases');
+    if (Array.isArray(cloudCases) && cloudCases.length) {
+      var localCases = []; try { localCases = JSON.parse(localStorage.getItem('er_cases')||'[]'); } catch(e){}
+      if (cloudCases.length >= localCases.length) { localStorage.setItem('er_cases', JSON.stringify(cloudCases)); changed = true; }
+    }
+    const cloudPool = await fsGet('talentPool');
+    if (Array.isArray(cloudPool) && cloudPool.length) {
+      var localPool = []; try { localPool = JSON.parse(localStorage.getItem('er_talent_pool')||'[]'); } catch(e){}
+      if (cloudPool.length >= localPool.length) { localStorage.setItem('er_talent_pool', JSON.stringify(cloudPool)); changed = true; }
+    }
     if (changed) {
       updateBadge();
     // Show file:// mode notice
@@ -5227,6 +5244,23 @@ var DATETIME_FORMATS = [
 
 function getDateFormat() { return appSettings.dateFormat || 'long'; }
 function getDateTimeFormat() { return appSettings.dateTimeFormat || 'long12'; }
+
+// Convert a stored date value (ISO or a display format) back to YYYY-MM-DD for date inputs
+function toISODate(val) {
+  if (!val) return '';
+  var s = String(val).trim();
+  // Already ISO?
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD/MM/YYYY or DD-MM-YYYY
+  var m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) return m[3] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[1]).slice(-2);
+  // Try Date parsing (handles "31 July 2026", "July 31, 2026", etc.)
+  var d = new Date(s);
+  if (!isNaN(d)) {
+    return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+  }
+  return '';
+}
 
 function formatDateValue(dateStr) {
   if (!dateStr) return '';
@@ -9202,7 +9236,7 @@ function saveCustomJourneys(journeys) {
 
 function savePeople(people) {
   localStorage.setItem('er_people', JSON.stringify(people));
-  // People: localStorage + Excel only — not Firebase
+  fsSet('people', 'main', people);
 }
 
 function saveQuickBlocks(qbs) {
@@ -9586,8 +9620,8 @@ function renderProfileFieldInput(f, p) {
   var label = '<label>'+f.label+(f.required?' <span style="color:var(--red);">*</span>':'')+'</label>';
   var id = 'pf_input_'+f.id;
   if(f.type==='textarea') return label+'<textarea id="'+id+'" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">'+val.replace(/</g,'&lt;')+'</textarea>';
-  if(f.type==='date') return label+'<input type="date" id="'+id+'" value="'+val+'">';
-  if(f.type==='datetime') return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+(val.split(' ')[0]||'')+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
+  if(f.type==='date') return label+'<input type="date" id="'+id+'" value="'+toISODate(val)+'">';
+  if(f.type==='datetime') return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+toISODate((val.split(" ")[0]||""))+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
   if(f.type==='number') return label+'<input type="number" id="'+id+'" value="'+val.replace(/"/g,'&quot;')+'">';
   if(f.type==='composite') return label+'<input id="'+id+'" data-composite="'+(f.pattern||'').replace(/"/g,'&quot;')+'" value="'+val.replace(/"/g,'&quot;')+'" placeholder="Auto-fills from other fields" style="background:#FFFBF5;"><div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
   if(f.type==='schedule') return label+'<div id="'+id+'_wrap">'+renderScheduleEditor(id, parseSchedule(val), '')+'</div>';
@@ -9621,9 +9655,9 @@ function renderProfileFieldInput(f, p) {
   var pNorm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
   var pHasDate = /\bdate\b/i.test(pNorm), pHasTime = /\btime\b/i.test(pNorm), pHasUpdate = /\bupdate\b/i.test(pNorm);
   if (pHasDate && pHasTime)
-    return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+(val.split(' ')[0]||'')+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
+    return label+'<div style="display:flex;gap:6px;"><input type="date" id="'+id+'" value="'+toISODate((val.split(" ")[0]||""))+'"><input type="time" id="'+id+'_time" value="'+(val.split(' ')[1]||'')+'" style="width:110px;"></div>';
   if (pHasDate && !pHasUpdate)
-    return label+'<input type="date" id="'+id+'" value="'+val+'">';
+    return label+'<input type="date" id="'+id+'" value="'+toISODate(val)+'">';
 
   return label+'<input id="'+id+'" value="'+val.replace(/"/g,'&quot;')+'" placeholder="'+(f.placeholder||f.label)+'">';
 }
@@ -9637,10 +9671,12 @@ function savePerson() {
     var el=document.getElementById('pf_input_'+f.id);
     var timeEl=document.getElementById('pf_input_'+f.id+'_time');
     if (timeEl) {
+      // Store datetime as ISO "YYYY-MM-DD HH:MM" so the inputs can read it back
       var d = el ? el.value : '', t = timeEl.value || '';
-      person[f.id] = d ? (t ? formatDateTimeValue(d,t) : formatDateValue(d)) : '';
+      person[f.id] = d ? (t ? (d + ' ' + t) : d) : '';
     } else if (el && el.type === 'date') {
-      person[f.id] = el.value ? formatDateValue(el.value) : '';
+      // Store the raw ISO date (YYYY-MM-DD); formatting happens only at template render
+      person[f.id] = el.value || '';
     } else {
       person[f.id]=el?el.value.trim():'';
     }
@@ -9717,7 +9753,7 @@ var lcEditingCaseId = null;
 function loadCases() { return JSON.parse(localStorage.getItem('er_cases')||'[]'); }
 function saveCases(cases) {
   localStorage.setItem('er_cases', JSON.stringify(cases));
-  // Cases: localStorage + Excel only — not Firebase
+  fsSet('cases', 'main', cases);
 }
 
 // ── RENDER LIFECYCLE ────────────────────────────────────────────────────────
@@ -11107,8 +11143,8 @@ function renderRoleFieldInput(f, existing) {
   var label = '<label>' + f.label + (f.required ? ' <span style="color:var(--red);">*</span>' : '') + '</label>';
   var id = 'rf_input_' + f.id;
   if (f.type === 'textarea') return label + '<textarea id="' + id + '" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">' + String(val).replace(/</g,'&lt;') + '</textarea>';
-  if (f.type === 'date') return label + '<input type="date" id="' + id + '" value="' + val + '">';
-  if (f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (String(val).split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (String(val).split(' ')[1]||'') + '" style="width:110px;"></div>';
+  if (f.type === 'date') return label + '<input type="date" id="' + id + '" value="' + toISODate(val) + '">';
+  if (f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + toISODate(String(val).split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (String(val).split(' ')[1]||'') + '" style="width:110px;"></div>';
   if (f.type === 'number') return label + '<input type="number" id="' + id + '" value="' + String(val).replace(/"/g,'&quot;') + '">';
   if (f.type === 'select') {
     var opts = '<option value="">— Select —</option>' + (f.options||[]).map(function(o){ return '<option' + (val===o?' selected':'') + '>' + o + '</option>'; }).join('');
@@ -11154,9 +11190,9 @@ function savePositionRequest() {
     if (timeEl) {
       var d = el ? el.value : '';
       var t = timeEl.value || '';
-      v = d ? (t ? formatDateTimeValue(d, t) : formatDateValue(d)) : '';
+      v = d ? (t ? (d + ' ' + t) : d) : '';
     } else if (el && el.type === 'date') {
-      v = el.value ? formatDateValue(el.value) : '';
+      v = el.value || '';
     } else {
       v = el ? el.value.trim() : '';
     }
@@ -12763,12 +12799,11 @@ function saveCandidate() {
     var el = document.getElementById('cand_input_' + f.id);
     var timeEl = document.getElementById('cand_input_' + f.id + '_time');
     if (timeEl) {
-      // datetime field — combine date + time
       var d = el ? el.value : '';
       var t = timeEl.value || '';
-      candidate[f.id] = d ? (t ? formatDateTimeValue(d, t) : formatDateValue(d)) : '';
+      candidate[f.id] = d ? (t ? (d + ' ' + t) : d) : '';
     } else if (el && el.type === 'date') {
-      candidate[f.id] = el.value ? formatDateValue(el.value) : '';
+      candidate[f.id] = el.value || '';
     } else {
       candidate[f.id] = el ? el.value.trim() : '';
     }
