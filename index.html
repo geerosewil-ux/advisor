@@ -1603,6 +1603,25 @@ var LC_TPL_SEPARATION = 'lct4';
 
 var DEFAULT_TEMPLATES = [
   // ── LIFECYCLE TEMPLATES ────────────────────────────────────────────────
+  { id:'refchk1', type:'template', name:'Employment Reference Check', category:'Recruitment',
+    format:'email', subject:'Reference request — {{APPLICANT NAME}} ({{POSITION}})',
+    to:'{{REFEREE EMAIL}}', desc:'Reference check request with fillable response table', leg:'', system:'national',
+    kbLinks:[], legLinks:[], lastReviewed:'2025-01-01', created:'2025-01-01',
+    body:`Dear {{REFEREE NAME}},
+
+Thank you for agreeing to provide a reference for {{APPLICANT NAME}}, who has applied for the position of {{POSITION}} with us. Your honest and considered feedback is genuinely valued and will help us make a well-informed decision.
+
+Where possible, would you please respond to the questions in the table below by typing directly into the right-hand column. There are no right or wrong answers — a brief comment for each is perfectly fine, and you're welcome to skip any question you'd prefer not to answer. All responses are treated confidentially.
+
+Once complete, simply reply to this email with the table filled in. If you'd prefer to speak by phone instead, just let me know a convenient time and I'll call you.
+
+{{REFERENCE CHECK TABLE}}
+
+Thank you once again for taking the time to complete this reference. Please don't hesitate to contact me if you have any questions.
+
+Kind regards`
+  },
+  // ── LIFECYCLE TEMPLATES ────────────────────────────────────────────────
   { id:'lct1', type:'template', name:'IT Access Request — New Starter', category:'General',
     format:'email', subject:'IT Access Request – {{EMPLOYEE NAME}} commencing {{START DATE}}',
     desc:'Request for IT setup for a new employee', leg:'', system:'national',
@@ -2120,6 +2139,11 @@ function loadData() {
   const kbData = safeParse('er_au_kb', DEFAULT_KB);
   kbData.forEach(entry => rehydratePdfs(entry.pdfs||[]));
   const tplData = safeParse('er_au_tpls', DEFAULT_TEMPLATES);
+  // Ensure the reference check template exists for existing users (added later)
+  if (!tplData.some(function(t){ return t.id === 'refchk1'; })) {
+    var refTpl = DEFAULT_TEMPLATES.find(function(t){ return t.id === 'refchk1'; });
+    if (refTpl) tplData.unshift(JSON.parse(JSON.stringify(refTpl)));
+  }
   // Rehydrate template block attachments into pdfStore so .eml downloads find their file data
   tplData.forEach(function(t){
     (t.blocks||[]).forEach(function(b){
@@ -3063,9 +3087,16 @@ function outlookBody(item, forSend) {
   var blockToOutlookHtml = function(htmlContent, blockFontFam, blockFontSz, blockCol) {
     // Strip inline font-family and font-size styles baked in by the rich text editor
     // so block-level and global typography settings win
-    const cleaned = (htmlContent || '')
+    var cleaned = (htmlContent || '')
       .replace(/font-family\s*:[^;"}]+;?/gi, '')
       .replace(/font-size\s*:[^;"}]+;?/gi, '');
+    // Remove empty paragraphs (the main cause of uneven gaps): <p></p>, <p><br></p>, <p>&nbsp;</p>
+    cleaned = cleaned
+      .replace(/<p[^>]*>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '')
+      // Collapse a trailing <br> right before a closing </p> (editor artefact)
+      .replace(/(<br\s*\/?>)+\s*<\/p>/gi, '</p>')
+      // Collapse runs of 2+ <br> down to a single one so blank lines don't stack
+      .replace(/(<br\s*\/?>\s*){2,}/gi, '<br>');
     const filled = fillPh(cleaned);
     const tmp = document.createElement('div');
     tmp.innerHTML = filled;
@@ -3074,6 +3105,10 @@ function outlookBody(item, forSend) {
     const ff = blockFontFam || "Aptos,sans-serif";
     const fs = blockFontSz || (T.fontSize + 'px');
     const fc = blockCol || T.bodyColor;
+    // Paragraph gap scales with the chosen line spacing so <p> breaks and line
+    // spacing feel consistent. Tight spacing → small gap; airy → larger gap.
+    const _lh = parseFloat(T.lineHeight) || 1.55;
+    const paraGap = Math.round((parseFloat(T.fontSize)||15) * (_lh - 0.85)) + 'px';
     const nodes = tmp.childNodes.length ? tmp.childNodes : [tmp];
 
     var nodeToHtml = function(node) {
@@ -3084,23 +3119,23 @@ function outlookBody(item, forSend) {
       if (tag === 'h1') return `<p style="margin:16px 0 4px;font-family:${ff};font-size:18px;font-weight:bold;color:${C.bodyHeading};">${inner}</p>`;
       if (tag === 'h2') return `<p style="margin:14px 0 4px;font-family:${ff};font-size:${fs};font-weight:bold;letter-spacing:0.06em;text-transform:uppercase;color:${C.bodyHeading};border-bottom:1px solid #EAF3F3;padding-bottom:4px;">${inner}</p>`;
       if (tag === 'h3') return `<p style="margin:10px 0 3px;font-family:${ff};font-size:${fs};font-weight:bold;color:${C.bodyText};">${inner}</p>`;
-      if (tag === 'p') return `<p style="margin:0 0 12px;font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${inner}</p>`;
+      if (tag === 'p') return `<p style="margin:0 0 ${paraGap};font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${inner}</p>`;
       if (tag === 'strong' || tag === 'b') return `<strong>${inner}</strong>`;
       if (tag === 'em' || tag === 'i') return `<em>${inner}</em>`;
       if (tag === 'u') return `<u>${inner}</u>`;
       if (tag === 'a') return `<a href="${node.getAttribute('href')||''}" style="color:${C.bodyHeading};">${inner}</a>`;
       if (tag === 'br') return '<br>';
       if (tag === 'ul') {
-        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${
+        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 ${paraGap};">${
           Array.from(node.querySelectorAll('li')).map(li =>
-            `<tr><td width="18" valign="top" style="font-family:${ff};font-size:${fs};color:${C.bodyHeading};padding-top:2px;">•</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${li.innerHTML}</td></tr>`
+            `<tr><td width="18" valign="top" style="font-family:${ff};font-size:${fs};color:${C.bodyHeading};padding-top:2px;">•</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};padding-bottom:3px;">${li.innerHTML.replace(/<\/?p[^>]*>/gi,'').trim()}</td></tr>`
           ).join('')
         }</table>`;
       }
       if (tag === 'ol') {
-        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;">${
+        return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 ${paraGap};">${
           Array.from(node.querySelectorAll('li')).map((li,i) =>
-            `<tr><td width="24" valign="top" style="font-family:${ff};font-size:${fs};font-weight:bold;color:${C.bodyHeading};padding-top:2px;">${i+1}.</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${li.innerHTML}</td></tr>`
+            `<tr><td width="24" valign="top" style="font-family:${ff};font-size:${fs};font-weight:bold;color:${C.bodyHeading};padding-top:2px;">${i+1}.</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};padding-bottom:3px;">${li.innerHTML.replace(/<\/?p[^>]*>/gi,'').trim()}</td></tr>`
           ).join('')
         }</table>`;
       }
@@ -3407,6 +3442,7 @@ function injectOrgFields() {
   if (s.adviserName && !fieldValues['ER ADVISER']) fieldValues['ER ADVISER'] = s.adviserName;
   if (s.adviserTitle && !fieldValues['YOUR TITLE']) fieldValues['YOUR TITLE'] = s.adviserTitle;
   if (s.adviserEmail && !fieldValues['ER EMAIL']) fieldValues['ER EMAIL'] = s.adviserEmail;
+  if (!fieldValues['REFERENCE CHECK TABLE']) fieldValues['REFERENCE CHECK TABLE'] = renderReferenceCheckTable();
   if (s.orgPhone && !fieldValues['ORGANISATION PHONE']) fieldValues['ORGANISATION PHONE'] = s.orgPhone;
   if (s.orgABN && !fieldValues['ABN']) fieldValues['ABN'] = s.orgABN;
   // Full org address for letterheads
@@ -5058,6 +5094,8 @@ function resolveEntityFields(entity, entityType) {
   if (s.adviserName)  { values['ER ADVISER'] = s.adviserName; values['ADVISER NAME'] = s.adviserName; }
   if (s.adviserTitle) { values['YOUR TITLE'] = s.adviserTitle; values['ADVISER TITLE'] = s.adviserTitle; }
   if (s.adviserEmail) { values['ER EMAIL'] = s.adviserEmail; }
+  // Reference check table (always available)
+  values['REFERENCE CHECK TABLE'] = renderReferenceCheckTable();
 
   // Pronoun expansion
   var pronounVal = entity.pf_pronouns || entity.cand_pronouns || values['PRONOUNS'] || '';
@@ -9353,6 +9391,50 @@ function fmtTime12(t) {
   var h12 = h % 12; if (h12 === 0) h12 = 12;
   return h12 + ':' + m + ap;
 }
+
+// ── REFERENCE CHECK ───────────────────────────────────────────────────────
+var REFERENCE_QUESTIONS = [
+  'Position held & period worked together, and in what capacity',
+  "What were the applicant's key responsibilities?",
+  "Generally, how would you describe the candidate's performance?",
+  'How would you describe their attitude to their work?',
+  'Did they demonstrate a strong work ethic and reliability? Punctuality? Attendance?',
+  'How did they handle high-pressure situations or tight deadlines?',
+  'How would you describe their communication skills, written and verbal?',
+  'How would you describe their customer service skill level?',
+  'How did they work as part of a team?',
+  'How did they interact with colleagues and management? Could they collaborate effectively?',
+  'How did they handle feedback and performance evaluations? Open to improvement?',
+  'Is there any particular kind of person they may find more difficult to work with?',
+  "What were the candidate's main strengths?",
+  'What do you consider to be their weaknesses or areas for development?',
+  'Were there areas where they needed additional support or training?',
+  'Did you ever have cause to counsel them about any aspect of their work or behaviour?',
+  'Any instances where they showed leadership or took initiative beyond their duties?',
+  'Did they require minimal supervision to complete tasks effectively?',
+  'Did they display adaptability and the ability to learn quickly?',
+  'How would you rate their computer skills or proficiency in relevant tools?',
+  'Insight into their fit with company culture and relationships with colleagues?',
+  'Availability to undertake additional work when required?',
+  'Overall, how would you rate their suitability for the position being considered?',
+  'Would you re-employ this person if given the opportunity?',
+  'Anything else important for us to know about their performance or suitability?'
+];
+function renderReferenceCheckTable() {
+  var ff = 'Aptos,sans-serif';
+  var rows = REFERENCE_QUESTIONS.map(function(q){
+    return '<tr>'
+      + '<td style="border:1px solid #D8DEE4;padding:9px 11px;background:#F7FAFA;font-weight:600;font-family:'+ff+';font-size:14px;width:46%;vertical-align:top;">'+q+'</td>'
+      + '<td style="border:1px solid #D8DEE4;padding:9px 11px;background:#fff;font-family:'+ff+';font-size:14px;vertical-align:top;color:#B0B8C0;font-style:italic;">Your response…</td>'
+      + '</tr>';
+  }).join('');
+  return '<table style="border-collapse:collapse;width:100%;border:1px solid #D8DEE4;font-family:'+ff+';margin:12px 0;">'
+    + '<thead><tr>'
+    + '<th style="border:1px solid #D8DEE4;padding:8px 11px;background:#EAF3F3;color:#1A6B6B;font-size:12px;text-transform:uppercase;letter-spacing:.06em;text-align:left;">Question</th>'
+    + '<th style="border:1px solid #D8DEE4;padding:8px 11px;background:#EAF3F3;color:#1A6B6B;font-size:12px;text-transform:uppercase;letter-spacing:.06em;text-align:left;">Your response</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
 function renderScheduleTable(sched) {
   sched = parseSchedule(sched);
   var ff = 'Aptos,sans-serif';
@@ -12596,6 +12678,160 @@ function runBulkEmail(roleId) {
 var editingCandidateId = null;
 var editingCandidateRoleId = null;
 
+// ── REFEREES (reference checks on a candidate) ────────────────────────────
+function getCandidateReferees(roleId, candId) {
+  var c = getCandidates(roleId).find(function(x){ return x.id === candId; });
+  return (c && c._referees) ? c._referees : [];
+}
+function saveCandidateReferees(roleId, candId, referees) {
+  var cands = getCandidates(roleId);
+  var c = cands.find(function(x){ return x.id === candId; });
+  if (!c) return;
+  c._referees = referees;
+  saveCandidates(roleId, cands);
+}
+function renderRefereesSection(roleId, candId, c) {
+  var referees = (c && c._referees) ? c._referees : [];
+  var html = '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+    + '<div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);">Referees / Reference Checks</div>'
+    + '<button type="button" class="btn btn-sm btn-primary" onclick="addReferee(\''+roleId+'\',\''+candId+'\')">+ Add referee</button>'
+    + '</div>';
+  if (!referees.length) {
+    html += '<div style="font-size:12px;color:var(--text3);font-style:italic;">No referees added yet.</div>';
+  } else {
+    html += referees.map(function(r, i){
+      var statusColors = { '':'var(--text3)', 'Not contacted':'var(--text3)', 'Sent':'#B8791A', 'Responded':'var(--teal)', 'Declined':'var(--red)' };
+      var st = r.status || 'Not contacted';
+      return '<div style="background:var(--bg);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px;">'
+        + '<div style="display:flex;gap:8px;align-items:flex-start;">'
+        + '<div style="flex:1;min-width:0;">'
+        + '<div style="font-size:13px;font-weight:600;">'+(r.name||'Unnamed referee')+'</div>'
+        + '<div style="font-size:11.5px;color:var(--text3);">'+[r.company, r.relationship, r.phone, r.email].filter(Boolean).join(' · ')+'</div>'
+        + '</div>'
+        + '<span style="font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px;background:white;color:'+(statusColors[st]||'var(--text3)')+';border:1px solid var(--border);flex-shrink:0;">'+st+'</span>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">'
+        + '<button type="button" class="btn btn-sm" onclick="editReferee(\''+roleId+'\',\''+candId+'\','+i+')" style="font-size:11px;">Edit</button>'
+        + '<button type="button" class="btn btn-sm btn-primary" onclick="sendRefereeCheck(\''+roleId+'\',\''+candId+'\','+i+')" style="font-size:11px;">✉ Send reference check</button>'
+        + '<select onchange="setRefereeStatus(\''+roleId+'\',\''+candId+'\','+i+',this.value)" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);">'
+        + ['Not contacted','Sent','Responded','Declined'].map(function(s){ return '<option'+(st===s?' selected':'')+'>'+s+'</option>'; }).join('')
+        + '</select>'
+        + '<button type="button" class="btn btn-sm" onclick="deleteReferee(\''+roleId+'\',\''+candId+'\','+i+')" style="font-size:11px;color:var(--red);">Remove</button>'
+        + '</div>'
+        + (r.notes ? '<div style="font-size:11.5px;color:var(--text2);margin-top:6px;background:white;padding:6px 8px;border-radius:var(--r-sm);">'+r.notes+'</div>' : '')
+        + '</div>';
+    }).join('');
+  }
+  html += '</div>';
+  return html;
+}
+function refreshRefereesSection(roleId, candId) {
+  // Re-render just the referees section without closing the modal
+  var modal = document.getElementById('candidateModal');
+  if (!modal) return;
+  var c = getCandidates(roleId).find(function(x){ return x.id === candId; });
+  // Find and replace the referees container (last bordered section)
+  openCandidateModal(roleId, candId); // simplest: re-open (preserves saved data)
+}
+function refereeFormModal(roleId, candId, idx) {
+  var referees = getCandidateReferees(roleId, candId);
+  var r = (idx != null) ? referees[idx] : {};
+  var html = '<div class="overlay open" id="refereeModal" style="z-index:10001;"><div class="modal" style="width:420px;">'
+    + '<div class="modal-title">'+(idx!=null?'Edit':'Add')+' Referee</div>'
+    + '<div class="form-field"><label>Name</label><input id="ref_name" value="'+(r.name||'').replace(/"/g,'&quot;')+'"></div>'
+    + '<div class="form-field"><label>Company</label><input id="ref_company" value="'+(r.company||'').replace(/"/g,'&quot;')+'"></div>'
+    + '<div class="form-field"><label>Position / relationship to applicant</label><input id="ref_rel" value="'+(r.relationship||'').replace(/"/g,'&quot;')+'"></div>'
+    + '<div class="form-row"><div class="form-field"><label>Phone</label><input id="ref_phone" value="'+(r.phone||'').replace(/"/g,'&quot;')+'"></div>'
+    + '<div class="form-field"><label>Email</label><input id="ref_email" value="'+(r.email||'').replace(/"/g,'&quot;')+'"></div></div>'
+    + '<div class="form-field"><label>Notes / response</label><textarea id="ref_notes" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;">'+(r.notes||'').replace(/</g,'&lt;')+'</textarea></div>'
+    + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'refereeModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="saveReferee(\''+roleId+'\',\''+candId+'\','+(idx!=null?idx:'null')+')">Save referee</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function addReferee(roleId, candId) { refereeFormModal(roleId, candId, null); }
+function editReferee(roleId, candId, idx) { refereeFormModal(roleId, candId, idx); }
+function saveReferee(roleId, candId, idx) {
+  var referees = getCandidateReferees(roleId, candId).slice();
+  var r = {
+    name: document.getElementById('ref_name').value.trim(),
+    company: document.getElementById('ref_company').value.trim(),
+    relationship: document.getElementById('ref_rel').value.trim(),
+    phone: document.getElementById('ref_phone').value.trim(),
+    email: document.getElementById('ref_email').value.trim(),
+    notes: document.getElementById('ref_notes').value.trim(),
+    status: (idx != null && referees[idx]) ? referees[idx].status : 'Not contacted'
+  };
+  if (!r.name) { alert('Referee name required.'); return; }
+  if (idx != null) referees[idx] = r; else referees.push(r);
+  saveCandidateReferees(roleId, candId, referees);
+  document.getElementById('refereeModal').remove();
+  openCandidateModal(roleId, candId);
+}
+function deleteReferee(roleId, candId, idx) {
+  if (!confirm('Remove this referee?')) return;
+  var referees = getCandidateReferees(roleId, candId).slice();
+  referees.splice(idx, 1);
+  saveCandidateReferees(roleId, candId, referees);
+  openCandidateModal(roleId, candId);
+}
+function setRefereeStatus(roleId, candId, idx, status) {
+  var referees = getCandidateReferees(roleId, candId).slice();
+  if (referees[idx]) { referees[idx].status = status; saveCandidateReferees(roleId, candId, referees); }
+}
+// Send a reference check email to a referee — fills applicant + referee details
+function sendRefereeCheck(roleId, candId, idx) {
+  var referee = getCandidateReferees(roleId, candId)[idx];
+  if (!referee) return;
+  var cand = getCandidates(roleId).find(function(x){ return x.id === candId; });
+  var role = loadPipeline().find(function(x){ return x.id === roleId; });
+  // Template picker — default to the reference check template
+  var emailTemplates = data.templates.filter(function(t){ return t.format === 'email' || t.format === 'letter'; });
+  if (!emailTemplates.length) { alert('No email templates available.'); return; }
+  var defaultTpl = emailTemplates.find(function(t){ return t.id === 'refchk1' || /reference check/i.test(t.name); });
+  var html = '<div class="overlay open" id="refSendModal" style="z-index:10001;"><div class="modal" style="width:440px;">'
+    + '<div class="modal-title">Send reference check</div>'
+    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;">To <strong>'+(referee.name||'referee')+'</strong>'+(referee.email?' ('+referee.email+')':' <span style="color:var(--red);">— no email on file</span>')+'</p>'
+    + '<div class="form-field"><label>Template</label><select id="refSendTpl">'
+    + emailTemplates.map(function(t){ return '<option value="'+t.id+'"'+(defaultTpl&&t.id===defaultTpl.id?' selected':'')+'>'+t.name+'</option>'; }).join('')
+    + '</select></div>'
+    + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'refSendModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="runRefereeCheck(\''+roleId+'\',\''+candId+'\','+idx+')">Generate email</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function runRefereeCheck(roleId, candId, idx) {
+  var tplId = document.getElementById('refSendTpl').value;
+  var tpl = data.templates.find(function(t){ return t.id === tplId; });
+  var referee = getCandidateReferees(roleId, candId)[idx];
+  var cand = getCandidates(roleId).find(function(x){ return x.id === candId; });
+  var role = loadPipeline().find(function(x){ return x.id === roleId; });
+  if (!tpl || !referee) return;
+  var saved = fieldValues;
+  // Fill from candidate, then overlay applicant + referee placeholders
+  fieldValues = resolveEntityFields(cand, 'candidate');
+  var applicantName = getEntityDisplayName(cand, getCandidateFields()) || '';
+  var position = (role && role.position) || fieldValues['POSITION'] || '';
+  fieldValues['APPLICANT NAME'] = applicantName;
+  fieldValues['POSITION'] = position;
+  fieldValues['REFEREE NAME'] = referee.name || '';
+  fieldValues['REFEREE EMAIL'] = referee.email || '';
+  fieldValues['REFEREE COMPANY'] = referee.company || '';
+  fieldValues['REFERENCE CHECK TABLE'] = renderReferenceCheckTable();
+  var subj = (tpl.subject || tpl.name || '').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+  var bodyHtml = outlookBody(tpl, true);
+  var bodyText = bodyHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+  var to = referee.email || '';
+  buildAndDownloadEml(referee.name + ' - Reference for ' + applicantName, subj, bodyText, bodyHtml, [], to);
+  fieldValues = saved;
+  // Mark referee as Sent
+  var referees = getCandidateReferees(roleId, candId).slice();
+  if (referees[idx]) { referees[idx].status = 'Sent'; saveCandidateReferees(roleId, candId, referees); }
+  document.getElementById('refSendModal').remove();
+  toast('Reference check email generated');
+}
+
 function openCandidateModal(roleId, candidateId) {
   editingCandidateRoleId = roleId;
   editingCandidateId = candidateId || null;
@@ -12678,6 +12914,7 @@ function openCandidateModal(roleId, candidateId) {
     + '</div>'
     + roleContext
     + html
+    + (candidateId ? renderRefereesSection(roleId, candidateId, c) : '<div style="font-size:11.5px;color:var(--text3);margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">Save the candidate first to add referees.</div>')
     + '<div class="modal-footer">'
     + '<button class="btn" onclick="document.getElementById(\'candidateModal\').classList.remove(\'open\')">Cancel</button>'
     + (candidateId ? '<button class="btn" onclick="promoteCandidateToPeople(\'' + roleId + '\',\'' + candidateId + '\')">→ Add to People</button>' : '')
@@ -12810,6 +13047,8 @@ function saveCandidate() {
   });
   var candidates = getCandidates(editingCandidateRoleId);
   var idx = candidates.findIndex(function(x){ return x.id === candidate.id; });
+  // Preserve non-form props (referees, stage, pool links, etc.) from the existing record
+  if (idx >= 0) candidate = Object.assign({}, candidates[idx], candidate);
   if(idx >= 0) candidates[idx] = candidate; else candidates.push(candidate);
   saveCandidates(editingCandidateRoleId, candidates);
   document.getElementById('candidateModal').classList.remove('open');
@@ -13154,7 +13393,7 @@ function advancePipeline(id) {
 var viewingPipelineId = null;
 // Assemble a display name from whatever name fields exist on an entity.
 // ── CANDIDATE STAGES (recruitment pipeline within a role) ─────────────────
-var DEFAULT_CANDIDATE_STAGES = ['Applied','Phone Screen','Interview','Offer','Hired','Discontinue'];
+var DEFAULT_CANDIDATE_STAGES = ['Applied','Phone Screen','Interview','Reference Check','Offer','Hired','Discontinue'];
 function getCandidateStages() {
   if (!appSettings.candidateStages || !appSettings.candidateStages.length) {
     appSettings.candidateStages = DEFAULT_CANDIDATE_STAGES.slice();
