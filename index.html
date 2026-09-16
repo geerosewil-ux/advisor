@@ -2085,6 +2085,11 @@ async function loadFromFirestore() {
       var localPool = []; try { localPool = JSON.parse(localStorage.getItem('er_talent_pool')||'[]'); } catch(e){}
       if (cloudPool.length >= localPool.length) { localStorage.setItem('er_talent_pool', JSON.stringify(cloudPool)); changed = true; }
     }
+    const cloudWt = await fsGet('wordTemplates');
+    if (Array.isArray(cloudWt) && cloudWt.length) {
+      var localWt = []; try { localWt = JSON.parse(localStorage.getItem('er_word_templates')||'[]'); } catch(e){}
+      if (cloudWt.length >= localWt.length) { localStorage.setItem('er_word_templates', JSON.stringify(cloudWt)); changed = true; }
+    }
     if (changed) {
       updateBadge();
     // Show file:// mode notice
@@ -3614,6 +3619,204 @@ function gatherMergeRecipients() {
 }
 
 var _mergeRecipients = [];
+// ── WORD MAIL MERGE ───────────────────────────────────────────────────────
+// Upload tagged .docx templates, merge in field values, download filled .docx.
+function getWordTemplates() {
+  try { return JSON.parse(localStorage.getItem('er_word_templates') || '[]'); }
+  catch(e) { return []; }
+}
+function saveWordTemplates(list) {
+  localStorage.setItem('er_word_templates', JSON.stringify(list));
+  fsSet('wordTemplates', 'main', list);
+}
+
+// Load pizzip + docxtemplater from CDN (once)
+function ensureDocxLibs(cb) {
+  if (window.PizZip && window.docxtemplater) { cb(); return; }
+  var loaded = 0, needed = 0, failed = false;
+  function done() { loaded++; if (loaded >= needed && !failed) cb(); }
+  function loadScript(src, check) {
+    if (check()) { done(); return; }
+    needed++;
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = function(){ done(); };
+    s.onerror = function(){ if(!failed){ failed = true; toast('Could not load Word libraries — check your connection'); } };
+    document.head.appendChild(s);
+  }
+  needed = 0; loaded = 0;
+  // PizZip first, then docxtemplater
+  if (!window.PizZip) {
+    needed++;
+    var s1 = document.createElement('script');
+    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/pizzip/3.1.7/pizzip.min.js';
+    s1.onload = function(){
+      var s2 = document.createElement('script');
+      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/docxtemplater/3.50.0/docxtemplater.js';
+      s2.onload = cb;
+      s2.onerror = function(){ toast('Could not load docxtemplater'); };
+      document.head.appendChild(s2);
+    };
+    s1.onerror = function(){ toast('Could not load PizZip'); };
+    document.head.appendChild(s1);
+  } else if (!window.docxtemplater) {
+    var s3 = document.createElement('script');
+    s3.src = 'https://cdnjs.cloudflare.com/ajax/libs/docxtemplater/3.50.0/docxtemplater.js';
+    s3.onload = cb;
+    s3.onerror = function(){ toast('Could not load docxtemplater'); };
+    document.head.appendChild(s3);
+  } else { cb(); }
+}
+
+// Upload a .docx file → store it (base64) as a Word template
+function uploadWordTemplate(fileInput) {
+  var file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  if (!/\.docx$/i.test(file.name)) { alert('Please upload a .docx file (Word). Old .doc format is not supported.'); return; }
+  if (file.size > 10 * 1024 * 1024) { alert('That file is over 10MB — too large to store in the browser. Try a smaller template.'); return; }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var b64 = e.target.result.split(',')[1]; // strip data: prefix
+    var list = getWordTemplates();
+    list.push({
+      id: 'wt' + Date.now(),
+      name: file.name.replace(/\.docx$/i, ''),
+      fileName: file.name,
+      data: b64,
+      uploaded: todayStr()
+    });
+    saveWordTemplates(list);
+    fileInput.value = '';
+    renderSettingsSection();
+    toast('Word template uploaded');
+  };
+  reader.readAsDataURL(file);
+}
+
+function deleteWordTemplate(id) {
+  if (!confirm('Delete this Word template?')) return;
+  saveWordTemplates(getWordTemplates().filter(function(t){ return t.id !== id; }));
+  renderSettingsSection();
+  toast('Word template deleted');
+}
+
+// Convert base64 → binary string for PizZip
+function _b64ToBinary(b64) {
+  var raw = atob(b64);
+  return raw;
+}
+
+// Merge a Word template with a values map → triggers download of filled .docx
+function mergeWordDoc(wtId, values, outName) {
+  ensureDocxLibs(function() {
+    try {
+      var wt = getWordTemplates().find(function(t){ return t.id === wtId; });
+      if (!wt) { toast('Word template not found'); return; }
+      var zip = new window.PizZip(_b64ToBinary(wt.data), { binary: true });
+      var Docxtemplater = window.docxtemplater;
+      var doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        delimiters: { start: '{{', end: '}}' },
+        nullGetter: function(part) {
+          // Unmatched tag → visible marker
+          return '[[MISSING: ' + (part.value || '') + ']]';
+        }
+      });
+      // Build a plain-text values object (docx merge is text, so strip any HTML)
+      var flat = {};
+      Object.keys(values).forEach(function(k){
+        var v = values[k];
+        if (v == null) return;
+        if (typeof v === 'string' && /<[a-z][\s\S]*>/i.test(v)) {
+          // HTML value (e.g. schedule/reference table) — strip to text for Word
+          v = v.replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{3,}/g,'\n\n').trim();
+        }
+        flat[k] = v;
+      });
+      doc.render(flat);
+      var out = doc.getZip().generate({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      var url = URL.createObjectURL(out);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = (outName || wt.name) + '.docx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    } catch(err) {
+      console.error('WORD MERGE ERROR:', err);
+      alert('Word merge failed: ' + (err.message || err) + '\n\nCheck that your {{tags}} are written correctly in the document.');
+    }
+  });
+}
+
+// Open the Word-merge recipient picker (reuses the mail-merge recipient gathering)
+function openWordMergePicker(wtId) {
+  var recips = gatherMergeRecipients();
+  var wt = getWordTemplates().find(function(t){ return t.id === wtId; });
+  if (!wt) return;
+  _mergeRecipients = recips;
+  var groups = { person:[], candidate:[], pool:[], case:[] };
+  recips.forEach(function(r, i){ groups[r.kind].push(Object.assign({_i:i}, r)); });
+  var groupLabels = { person:'People', candidate:'Candidates', pool:'Talent Pool', case:'Cases' };
+  var rows = '';
+  ['person','candidate','pool','case'].forEach(function(g){
+    if (!groups[g].length) return;
+    rows += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin:8px 0 4px;">'+groupLabels[g]+' ('+groups[g].length+')</div>';
+    rows += groups[g].map(function(r){
+      return '<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:5px;">'
+        + '<input type="checkbox" class="wmerge-check" data-idx="'+r._i+'" style="accent-color:var(--teal);width:16px;height:16px;">'
+        + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+r.name+'</div>'
+        + '<div style="font-size:11px;color:var(--text3);">'+(r.sub||'')+'</div></div></label>';
+    }).join('');
+  });
+  var html = '<div class="overlay open" id="wmergeModal" style="z-index:10001;"><div class="modal" style="width:480px;max-height:85vh;display:flex;flex-direction:column;">'
+    + '<div class="modal-title">Generate Word — '+wt.name+'</div>'
+    + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 10px;">Each selected person gets their own filled .docx, downloaded together. Open in Word and Save As PDF if you need a PDF.</p>'
+    + '<div style="display:flex;gap:8px;margin-bottom:8px;"><input id="wmergeSearch" placeholder="Search…" oninput="filterWMergeList(this.value)" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12.5px;"><button class="btn btn-sm" onclick="toggleAllWMerge(true)">All</button><button class="btn btn-sm" onclick="toggleAllWMerge(false)">None</button></div>'
+    + '<div id="wmergeList" style="flex:1;overflow-y:auto;margin-bottom:10px;">'+rows+'</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border);padding-top:10px;">'
+    + '<span id="wmergeCount" style="font-size:12px;font-weight:600;color:var(--teal);">0 selected</span>'
+    + '<div style="display:flex;gap:8px;"><button class="btn" onclick="document.getElementById(\'wmergeModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="runWordMerge(\''+wtId+'\')">Generate Word docs</button></div></div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+  document.getElementById('wmergeList').addEventListener('change', function(){ updateWMergeCount(); });
+}
+function updateWMergeCount(){ var n=document.querySelectorAll('.wmerge-check:checked').length; var el=document.getElementById('wmergeCount'); if(el)el.textContent=n+' selected'; }
+function toggleAllWMerge(on){ document.querySelectorAll('.wmerge-check').forEach(function(cb){ if(cb.closest('label').style.display!=='none') cb.checked=on; }); updateWMergeCount(); }
+function filterWMergeList(q){ q=(q||'').toLowerCase(); document.querySelectorAll('#wmergeList label').forEach(function(l){ l.style.display=l.textContent.toLowerCase().includes(q)?'':'none'; }); }
+function runWordMerge(wtId) {
+  var idxs = Array.from(document.querySelectorAll('.wmerge-check:checked')).map(function(cb){ return +cb.getAttribute('data-idx'); });
+  if (!idxs.length) { alert('Select at least one recipient.'); return; }
+  var saved = fieldValues;
+  idxs.forEach(function(idx, i){
+    var r = _mergeRecipients[idx];
+    if (!r) return;
+    var vals = resolveEntityFields(r.entity, r.entityType);
+    setTimeout(function(){ mergeWordDoc(wtId, vals, r.name); }, i * 500);
+  });
+  fieldValues = saved;
+  document.getElementById('wmergeModal').remove();
+  toast('Generating ' + idxs.length + ' Word document' + (idxs.length>1?'s':'') + '…');
+}
+
+// Copy the full placeholder list to clipboard for pasting into Word
+function copyPlaceholderList() {
+  var phs = getAllPlaceholders();
+  var tags = phs.map(function(p){ return '{{' + (p.label||p).toUpperCase() + '}}'; });
+  // De-dupe
+  tags = tags.filter(function(t,i){ return tags.indexOf(t) === i; }).sort();
+  var text = tags.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){ toast('Copied ' + tags.length + ' placeholders'); },
+      function(){ _fallbackCopy(text); });
+  } else { _fallbackCopy(text); }
+}
+function _fallbackCopy(text) {
+  var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast('Placeholders copied'); } catch(e){ alert(text); }
+  document.body.removeChild(ta);
+}
+
 function openMergePicker(tplId) {
   _mergeRecipients = gatherMergeRecipients();
   if (!_mergeRecipients.length) { alert('No people found in People, candidates, talent pool, or cases yet.'); return; }
@@ -5549,7 +5752,7 @@ function exportToExcel() {
   };
 
   var dsRows = [];
-  ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases','er_talent_pool'].forEach(function(k) {
+  ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases','er_talent_pool','er_word_templates'].forEach(function(k) {
     var def = (k === 'er_journey_steps' || k === 'er_candidates') ? '{}' : '[]';
     blobToRows(k, localStorage.getItem(k) || def).forEach(function(r){ dsRows.push(r); });
   });
@@ -5771,7 +5974,7 @@ function importFromExcel(file) {
       // ── DataStores blobs (chunk-aware) ────────────────────────────────
       if (wb.SheetNames.includes('DataStores')) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets['DataStores'], { defval:'' });
-        ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases','er_talent_pool'].forEach(function(k) {
+        ['er_custom_journeys','er_journey_steps','er_pipeline','er_candidates','er_people','er_cases','er_talent_pool','er_word_templates'].forEach(function(k) {
           var val = reassembleBlob(rows, k);
           if (val) {
             try { JSON.parse(val); localStorage.setItem(k, val); }
@@ -11636,6 +11839,7 @@ function renderSettings() {
     { id:'awards',          label:'Awards & Classifications' },
     { id:'candStages',      label:'Candidate Stages' },
     { id:'schedPresets',    label:'Schedule Presets' },
+    { id:'wordTemplates',   label:'Word Merge Templates' },
     { id:'adviser',         label:'ER Adviser / Signatory' },
     { id:'appearance',      label:'Appearance' },
     { id:'tplDefaults',     label:'Template Defaults' },
@@ -12143,6 +12347,32 @@ function renderSettingsSection() {
           </button>
         </div>
       </div>
+    </div>`;
+    return;
+  }
+
+  if (settingsSection === 'wordTemplates') {
+    var wts = getWordTemplates();
+    el.innerHTML = `<div class="settings-section">
+      <h3>Word Merge Templates</h3>
+      <p>Upload Word (.docx) files with <code>{{PLACEHOLDER}}</code> tags — your letterhead, fonts and formatting are kept exactly. Then generate a filled document for one person or a batch. For PDF, open the downloaded file in Word and Save As PDF.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+        <label class="btn btn-primary btn-sm" style="cursor:pointer;">
+          + Upload .docx template
+          <input type="file" accept=".docx" onchange="uploadWordTemplate(this)" style="display:none;">
+        </label>
+        <button class="btn btn-sm" onclick="copyPlaceholderList()">⧉ Copy placeholder list</button>
+      </div>
+      <p style="font-size:11.5px;color:var(--text3);margin-bottom:14px;">Tip: click "Copy placeholder list" then paste into Word to see every tag you can use. Tags must match exactly, e.g. <code>{{PREFERRED NAME}}</code>. Unmatched tags appear as <code>[[MISSING: TAG]]</code> in the output so you can spot them.</p>
+      ${wts.length ? wts.map(function(wt){
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:8px;">'
+          + '<div><div style="font-size:13px;font-weight:600;">'+wt.name+'</div>'
+          + '<div style="font-size:11.5px;color:var(--text3);">'+wt.fileName+' · uploaded '+(wt.uploaded||'')+'</div></div>'
+          + '<div style="display:flex;gap:6px;">'
+          + '<button class="btn btn-sm btn-primary" onclick="openWordMergePicker(\''+wt.id+'\')">Generate</button>'
+          + '<button class="btn btn-sm" onclick="deleteWordTemplate(\''+wt.id+'\')" style="color:var(--red);">Delete</button>'
+          + '</div></div>';
+      }).join('') : '<p style="color:var(--text3);font-style:italic;font-size:13px;">No Word templates yet. Upload a tagged .docx to get started.</p>'}
     </div>`;
     return;
   }
