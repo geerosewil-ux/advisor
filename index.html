@@ -806,8 +806,8 @@ nav{height:54px;background:var(--slate);display:flex;align-items:center;padding:
         <span id="addBtnLabel">New Template</span>
       </button>
       <button class="btn-add" id="wordMergeBtn" onclick="openWordTemplatesManager()" style="display:none;background:var(--bg);color:var(--text2);border:1px solid var(--border);">
-        <svg viewBox="0 0 24 24" style="width:15px;height:15px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <span>Word Merge Templates</span>
+        <svg viewBox="0 0 24 24" style="width:15px;height:15px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Upload Word template</span>
       </button>
     </div>
   </div>
@@ -2434,19 +2434,25 @@ function renderSidebar() {
       });
 
   if (!filtered.length) {
-    listEl.innerHTML = '<div style="padding:24px 12px;color:var(--text3);font-size:13px;text-align:center;">Nothing here yet.</div>';
-    return;
+    var hasWord = currentTab === 'templates' && getWordTemplates().some(function(w){ return !q || (w.name||'').toLowerCase().includes(q); });
+    if (!hasWord) {
+      listEl.innerHTML = '<div style="padding:24px 12px;color:var(--text3);font-size:13px;text-align:center;">Nothing here yet.</div>';
+      return;
+    }
   }
 
   if (currentTab === 'templates' && activeCat === 'all') {
-    // Group templates — uncategorised or unknown category goes to 'Other'
+    // Merge Word templates (as normalised items) into the same category grouping
+    var wtItems = getWordTemplates()
+      .filter(function(w){ return !q || (w.name||'').toLowerCase().includes(q); })
+      .map(function(w){ return { id:w.id, name:w.name, category:w.category||'Other', desc:'Word merge', _isWord:true }; });
+    const combined = filtered.concat(wtItems);
     const grouped = {};
-    filtered.forEach(i => {
+    combined.forEach(i => {
       const cat = TPL_CATS.includes(i.category) ? i.category : (i.category || 'Other');
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(i);
     });
-    // Render in TPL_CATS order, then any extras
     const orderedCats = [...TPL_CATS, ...Object.keys(grouped).filter(c => !TPL_CATS.includes(c))];
     listEl.innerHTML = orderedCats.map(cat => {
       const g = grouped[cat];
@@ -2454,11 +2460,24 @@ function renderSidebar() {
       return `<div class="group-label">${cat}</div>` + g.map(itemCard).join('');
     }).join('');
   } else {
-    listEl.innerHTML = filtered.map(itemCard).join('');
+    var wtItems2 = (currentTab === 'templates')
+      ? getWordTemplates().filter(function(w){
+          var mc = activeCat === 'all' || (w.category||'Other') === activeCat;
+          var mq = !q || (w.name||'').toLowerCase().includes(q);
+          return mc && mq;
+        }).map(function(w){ return { id:w.id, name:w.name, category:w.category||'Other', desc:'Word merge', _isWord:true }; })
+      : [];
+    listEl.innerHTML = filtered.map(itemCard).join('') + wtItems2.map(itemCard).join('');
   }
 }
 
 function itemCard(item) {
+  if (item._isWord) {
+    return `<div class="list-item ${item.id===selectedId?'active':''}" onclick="selectWordTemplate('${item.id}')">
+      <div class="li-name"><span style="font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:8px;background:#EEF2FB;color:#3B5BAD;margin-right:4px;">DOCX</span>${item.name||'—'}</div>
+      <div class="li-sub">Word merge template</div>
+    </div>`;
+  }
   const rs = reviewStatus(item);
   const name = item.name || item.title || '—';
   const catParts = [item.category, item.subCategory].filter(c => c && c !== 'N/A');
@@ -3683,16 +3702,19 @@ function uploadWordTemplate(fileInput) {
   var reader = new FileReader();
   reader.onload = function(e) {
     var b64 = e.target.result.split(',')[1]; // strip data: prefix
+    var cat = prompt('Category for this template (e.g. Recruitment, Onboarding & Offboarding, General):', 'General') || 'General';
     var list = getWordTemplates();
     list.push({
       id: 'wt' + Date.now(),
       name: file.name.replace(/\.docx$/i, ''),
       fileName: file.name,
+      category: cat,
       data: b64,
       uploaded: todayStr()
     });
     saveWordTemplates(list);
     fileInput.value = '';
+    if (typeof renderSidebar === 'function') renderSidebar();
     toast('Word template uploaded');
   };
   reader.readAsDataURL(file);
@@ -3701,6 +3723,7 @@ function uploadWordTemplate(fileInput) {
 function deleteWordTemplate(id) {
   if (!confirm('Delete this Word template?')) return;
   saveWordTemplates(getWordTemplates().filter(function(t){ return t.id !== id; }));
+  if (typeof renderSidebar === 'function') renderSidebar();
   toast('Word template deleted');
 }
 
@@ -3820,6 +3843,58 @@ function _fallbackCopy(text) {
   var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
   try { document.execCommand('copy'); toast('Placeholders copied'); } catch(e){ alert(text); }
   document.body.removeChild(ta);
+}
+
+// Show a Word template's detail panel in the main content area
+function selectWordTemplate(id) {
+  selectedId = id;
+  var wt = getWordTemplates().find(function(t){ return t.id === id; });
+  if (!wt) return;
+  renderSidebar();
+  document.getElementById('emptyState').style.display = 'none';
+  var mc = document.getElementById('mainContent');
+  mc.style.display = 'block';
+  mc.innerHTML = `
+    <div style="max-width:720px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+        <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;background:#EEF2FB;color:#3B5BAD;">DOCX</span>
+        <h2 style="font-size:19px;font-weight:600;letter-spacing:-.3px;margin:0;">${wt.name}</h2>
+      </div>
+      <p style="font-size:13px;color:var(--text2);margin:0 0 20px;">Word merge template · ${wt.category||'Other'} · uploaded ${wt.uploaded||''}<br>
+        <span style="color:var(--text3);">${wt.fileName||''}</span></p>
+
+      <div style="background:var(--bg);border-radius:var(--r-lg);padding:18px 20px;margin-bottom:16px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Generate filled documents</div>
+        <p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;line-height:1.55;">Fill this template with a person's details. Pick one or many — you'll get one .docx each. For PDF, open in Word and Save As PDF.</p>
+        <button class="btn btn-primary" onclick="openWordMergePicker('${wt.id}')">Generate for selected people</button>
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-sm" onclick="copyPlaceholderList()">⧉ Copy placeholder list</button>
+        <button class="btn btn-sm" onclick="downloadWordTemplateOriginal('${wt.id}')">⬇ Download original</button>
+        <button class="btn btn-sm" onclick="changeWordTemplateCategory('${wt.id}')">Change category</button>
+        <button class="btn btn-sm" onclick="deleteWordTemplate('${wt.id}');showEmpty();" style="color:var(--red);margin-left:auto;">Delete template</button>
+      </div>
+
+      <div style="font-size:11.5px;color:var(--text3);margin-top:16px;line-height:1.5;">
+        Tags must match the app's field names exactly, e.g. <code>{{PREFERRED NAME}}</code>. Copy the placeholder list to see all available tags. Unmatched tags appear as <code>[[MISSING: TAG]]</code> in the output.
+      </div>
+    </div>`;
+}
+function downloadWordTemplateOriginal(id) {
+  var wt = getWordTemplates().find(function(t){ return t.id === id; });
+  if (!wt) return;
+  var a = document.createElement('a');
+  a.href = 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,' + wt.data;
+  a.download = wt.fileName || (wt.name + '.docx');
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+function changeWordTemplateCategory(id) {
+  var list = getWordTemplates();
+  var wt = list.find(function(t){ return t.id === id; });
+  if (!wt) return;
+  var cat = prompt('Category:', wt.category || 'General');
+  if (cat) { wt.category = cat; saveWordTemplates(list); renderSidebar(); selectWordTemplate(id); }
 }
 
 // Word templates manager (opens from the Templates section)
