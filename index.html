@@ -5052,7 +5052,7 @@ function resolveEntityFields(entity, entityType) {
     var raw = readEntityFieldValue(entity, f);
     if (raw === undefined || raw === null || raw === '') return;
     var val = raw;
-    if (f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(raw))) val = formatDateValue(raw);
+    if (f.type === 'date' && raw) val = formatDateValue(raw);
     var labelKey = (f.label || '').toUpperCase().trim();
     if (f.type === 'schedule') {
       // Render the schedule to table/summary/hours placeholders
@@ -5302,7 +5302,10 @@ function toISODate(val) {
 
 function formatDateValue(dateStr) {
   if (!dateStr) return '';
-  const d = new Date(dateStr + 'T00:00:00');
+  // Normalise any stored format (ISO, DD/MM/YYYY, "31 July 2026", etc.) to ISO first
+  var iso = toISODate(dateStr);
+  if (!iso) return dateStr; // unparseable — leave as-is
+  const d = new Date(iso + 'T00:00:00');
   if (isNaN(d)) return dateStr;
   const fmt = DATE_FORMATS.find(f => f.id === getDateFormat()) || DATE_FORMATS[0];
   return fmt.fn(d);
@@ -9549,7 +9552,7 @@ function expandPersonReference(personIdOrName, prefix, expandFieldIds, values) {
     if (!def) return;
     var v = readEntityFieldValue(person, def);
     if (!v) return;
-    if (def.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(v))) v = formatDateValue(v);
+    if (def.type === 'date' && v) v = formatDateValue(v);
     values[PRE + ' ' + def.label.toUpperCase().trim()] = v;
     if (/position|title/i.test(def.label)) values[PRE + ' TITLE'] = v;
     if (/email/i.test(def.label)) values[PRE + ' EMAIL'] = v;
@@ -10693,18 +10696,20 @@ function saveStepEdit() {
   if (!editingStepCtx) return;
   const { journeyId, stageId, stepId } = editingStepCtx;
   const tplIds = [...document.querySelectorAll('#stepTplPicker input:checked')].map(cb => cb.value);
-  const overrides = loadStepOverrides();
-  if (!overrides[journeyId]) overrides[journeyId] = {};
-  if (!overrides[journeyId][stageId]) overrides[journeyId][stageId] = {};
-  overrides[journeyId][stageId][stepId] = {
+  // Read the current steps for this stage, update the matching step, save back to the SAME store
+  var steps = getStageSteps(journeyId, stageId).slice();
+  var idx = steps.findIndex(function(s){ return s.id === stepId; });
+  var updated = {
+    id: stepId,
     title: document.getElementById('stepTitle').value.trim(),
     responsible: document.getElementById('stepResponsible').value.trim(),
     desc: document.getElementById('stepDesc').value.trim(),
-    tplIds
+    tplIds: tplIds
   };
-  saveStepOverrides(overrides);
+  if (idx >= 0) steps[idx] = Object.assign({}, steps[idx], updated);
+  else steps.push(updated);
+  saveStageSteps(journeyId, stageId, steps);
   document.getElementById('stepModal').classList.remove('open');
-  // Refresh the current view
   if (lcCaseId) renderLcCase();
   else renderLcJourney();
   toast('Step saved');
@@ -10714,12 +10719,8 @@ function deleteStep() {
   if (!editingStepCtx) return;
   const { journeyId, stageId, stepId } = editingStepCtx;
   if (!confirm('Delete this step? This removes it from all cases in this journey.')) return;
-  const overrides = loadStepOverrides();
-  if (!overrides[journeyId]) overrides[journeyId] = {};
-  if (!overrides[journeyId][stageId]) overrides[journeyId][stageId] = {};
-  // Mark as deleted
-  overrides[journeyId][stageId][stepId] = { _deleted: true };
-  saveStepOverrides(overrides);
+  var steps = getStageSteps(journeyId, stageId).filter(function(s){ return s.id !== stepId; });
+  saveStageSteps(journeyId, stageId, steps);
   document.getElementById('stepModal').classList.remove('open');
   if (lcCaseId) renderLcCase(); else renderLcJourney();
   toast('Step deleted');
@@ -10743,18 +10744,16 @@ function saveNewStep() {
   const title = document.getElementById('newStepTitle').value.trim();
   if (!title) { alert('Step title is required.'); return; }
   const { journeyId, stageId } = addStepCtx;
-  const overrides = loadStepOverrides();
-  if (!overrides[journeyId]) overrides[journeyId] = {};
-  if (!overrides[journeyId][stageId]) overrides[journeyId][stageId] = {};
   const newId = 'custom_' + Date.now();
-  overrides[journeyId][stageId][newId] = {
+  var steps = getStageSteps(journeyId, stageId).slice();
+  steps.push({
     id: newId,
     title,
     responsible: document.getElementById('newStepResponsible').value.trim(),
     desc: document.getElementById('newStepDesc').value.trim(),
     tplIds: []
-  };
-  saveStepOverrides(overrides);
+  });
+  saveStageSteps(journeyId, stageId, steps);
   document.getElementById('addStepModal').classList.remove('open');
   if (lcCaseId) renderLcCase(); else renderLcJourney();
   toast('Step added');
