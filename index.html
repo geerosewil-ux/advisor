@@ -3740,24 +3740,25 @@ function mergeWordDoc(wtId, values, outName) {
       var wt = getWordTemplates().find(function(t){ return t.id === wtId; });
       if (!wt) { toast('Word template not found'); return; }
       var zip = new window.PizZip(_b64ToBinary(wt.data), { binary: true });
+
+      // ── Repair tags that Word split across formatting runs ──
+      // Word often breaks "{{NAME}}" into <w:r>{{</w:r><w:r>NAME</w:r><w:r>}}</w:r>.
+      // Merge the visible text of each paragraph's runs so tags are contiguous.
+      try { repairDocxTags(zip); } catch(e) { console.warn('tag repair skipped:', e); }
+
       var Docxtemplater = window.docxtemplater || window.Docxtemplater || (window.docxtemplater && window.docxtemplater.default);
       if (!Docxtemplater) { toast('docxtemplater not available'); return; }
       var doc = new Docxtemplater(zip, {
         paragraphLoop: true,
         linebreaks: true,
         delimiters: { start: '{{', end: '}}' },
-        nullGetter: function(part) {
-          // Unmatched tag → visible marker
-          return '[[MISSING: ' + (part.value || '') + ']]';
-        }
+        nullGetter: function(part) { return '[[MISSING: ' + (part.value || '') + ']]'; }
       });
-      // Build a plain-text values object (docx merge is text, so strip any HTML)
       var flat = {};
       Object.keys(values).forEach(function(k){
         var v = values[k];
         if (v == null) return;
         if (typeof v === 'string' && /<[a-z][\s\S]*>/i.test(v)) {
-          // HTML value (e.g. schedule/reference table) — strip to text for Word
           v = v.replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{3,}/g,'\n\n').trim();
         }
         flat[k] = v;
@@ -3772,10 +3773,49 @@ function mergeWordDoc(wtId, values, outName) {
       setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
     } catch(err) {
       console.error('WORD MERGE ERROR:', err);
-      alert('Word merge failed: ' + (err.message || err) + '\n\nCheck that your {{tags}} are written correctly in the document.');
+      // docxtemplater bundles specifics in err.properties.errors
+      var detail = '';
+      if (err && err.properties && err.properties.errors && err.properties.errors.length) {
+        detail = err.properties.errors.map(function(e){
+          var ctx = (e.properties && (e.properties.id || e.properties.explanation || e.properties.context)) || '';
+          return '• ' + (e.properties && e.properties.explanation ? e.properties.explanation : (e.name || 'error')) + (ctx ? '  ['+ctx+']' : '');
+        }).join('\n');
+      }
+      alert('Word merge failed.\n\n' + (detail || (err.message||err)) + '\n\nCommon causes: a tag typed with mixed formatting (e.g. half bold), a stray { or }, or an unclosed tag. Retype the affected tag plainly in Word and re-upload.');
     }
   });
 }
+
+// Repair tags split across runs by rebuilding each paragraph's run text.
+// Walks document.xml (+ headers/footers) and, within each <w:p>, if the combined
+// run text contains {{ or }}, collapses the runs' <w:t> content so tags are whole.
+function repairDocxTags(zip) {
+  var targets = Object.keys(zip.files).filter(function(n){
+    return /word\/(document\d*|header\d*|footer\d*)\.xml$/.test(n);
+  });
+  targets.forEach(function(name){
+    var xml = zip.files[name].asText();
+    // Process each paragraph
+    xml = xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, function(para){
+      if (para.indexOf('{') === -1 && para.indexOf('}') === -1) return para;
+      // Collect all <w:t...>text</w:t> contents in order
+      var texts = [];
+      para.replace(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g, function(m, inner){ texts.push(inner); return m; });
+      var joined = texts.join('');
+      // Only rewrite if a delimiter is present (avoid touching normal paragraphs)
+      if (joined.indexOf('{{') === -1 && joined.indexOf('}}') === -1) return para;
+      // Put the entire joined text into the FIRST <w:t>, empty the rest
+      var first = true;
+      var out = para.replace(/(<w:t\b[^>]*>)([\s\S]*?)(<\/w:t>)/g, function(m, open, inner, close){
+        if (first) { first = false; return open + joined + close; }
+        return open + close;
+      });
+      return out;
+    });
+    zip.file(name, xml);
+  });
+}
+
 
 // Open the Word-merge recipient picker (reuses the mail-merge recipient gathering)
 function openWordMergePicker(wtId) {
@@ -11555,9 +11595,20 @@ function openPositionRequest(journeyId, editId) {
     return '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin:12px 0 8px;">' + sec + '</div>' + rows;
   }).join('');
 
+  var labelColors = [['','None'],['#3B82F6','Blue'],['#16A34A','Green'],['#B8791A','Amber'],['#8B5CF6','Purple'],['#DC2626','Red'],['#0EA5A5','Teal'],['#6B7280','Grey']];
+  var curLabel = existing && existing.label ? existing.label : '';
+  var curColor = existing && existing.labelColor ? existing.labelColor : '#3B82F6';
+  var labelRow = '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:14px;padding:10px 12px;background:var(--bg);border-radius:var(--r-sm);">'
+    + '<div class="form-field" style="flex:1;margin:0;"><label style="font-size:11px;">Scan label <span style="color:var(--text3);font-weight:400;">(optional — a tag to tell duplicate roles apart, e.g. "Balcatta", "Feb intake")</span></label>'
+    + '<input id="rf_role_label" value="' + curLabel.replace(/"/g,'&quot;') + '" placeholder="e.g. Balcatta" style="width:100%;box-sizing:border-box;"></div>'
+    + '<div class="form-field" style="margin:0;width:100px;"><label style="font-size:11px;">Colour</label>'
+    + '<select id="rf_role_label_color">' + labelColors.map(function(c){ return '<option value="'+c[0]+'"'+(curColor===c[0]?' selected':'')+'>'+c[1]+'</option>'; }).join('') + '</select></div>'
+    + '</div>';
+
   modal.innerHTML = '<div class="modal" style="width:600px;max-height:90vh;overflow-y:auto;">'
     + '<div class="modal-title" style="margin-bottom:4px;">' + (editId ? 'Edit Position Request' : 'New Position Request') + '</div>'
     + '<p style="font-size:12px;color:var(--text3);margin:0 0 14px;">Fields are configured in <a href="#" onclick="closePositionRequest();settingsSection=\'caseForms\';window._fbJourney=\'__role__\';currentTab=\'settings\';renderApp();return false;" style="color:var(--teal);">Form Builder → Role</a>.</p>'
+    + labelRow
     + body
     + '<div class="modal-footer">'
     + '<button class="btn" onclick="closePositionRequest()">Cancel</button>'
@@ -11659,6 +11710,12 @@ function savePositionRequest() {
     if (/employment type/i.test(f.label)) req.empType = v;
     if (/start date/i.test(f.label)) req.startDate = v;
   });
+
+  // Scan label + colour
+  var lblEl = document.getElementById('rf_role_label');
+  var lblColEl = document.getElementById('rf_role_label_color');
+  req.label = lblEl ? lblEl.value.trim() : '';
+  req.labelColor = lblColEl ? lblColEl.value : '';
 
   if (!positionVal && !req.position) { alert('Position title required.'); return; }
 
@@ -12961,6 +13018,68 @@ function removeFromPool(poolId) {
 }
 
 // Set a candidate's stage
+// ── ROLE TEMPLATES ────────────────────────────────────────────────────────
+function getRoleTemplates() { return appSettings.roleTemplates || []; }
+function saveRoleTemplates(list) { appSettings.roleTemplates = list; saveSettings(); }
+
+// Save an existing role as a reusable template (captures role definition fields,
+// excludes candidates, label, dates, and instance-specific props)
+function saveRoleAsTemplate(roleId) {
+  var role = loadPipeline().find(function(x){ return x.id === roleId; });
+  if (!role) return;
+  var name = prompt('Template name (e.g. "Trainer / Assessor"):', role.position || '');
+  if (!name) return;
+  var snapshot = {};
+  var exclude = ['id','created','stage','stageHistory','archived','archivedDate','hiredCandidate',
+    'onboardingCaseId','label','labelColor','startDate','endDate','_fromCandidate','_fromRole'];
+  Object.keys(role).forEach(function(k){
+    if (exclude.indexOf(k) !== -1) return;
+    if (/date/i.test(k)) return; // skip any date-ish instance field
+    snapshot[k] = role[k];
+  });
+  var list = getRoleTemplates();
+  list.push({ id: 'rt' + Date.now(), name: name, fields: snapshot, created: todayStr() });
+  saveRoleTemplates(list);
+  toast('Saved as role template: ' + name);
+}
+function deleteRoleTemplate(id) {
+  if (!confirm('Delete this role template?')) return;
+  saveRoleTemplates(getRoleTemplates().filter(function(t){ return t.id !== id; }));
+  renderSettingsSection();
+  toast('Role template deleted');
+}
+// New role from a template — opens the position request pre-filled
+function newRoleFromTemplate() {
+  var templates = getRoleTemplates();
+  if (!templates.length) { alert('No role templates yet. Open a role and choose "Save as template" first.'); return; }
+  var html = '<div class="overlay open" id="roleTplModal" style="z-index:10001;"><div class="modal" style="width:400px;">'
+    + '<div class="modal-title">New role from template</div>'
+    + '<div class="form-field"><label>Template</label><select id="roleTplSel">'
+    + templates.map(function(t){ return '<option value="'+t.id+'">'+t.name+'</option>'; }).join('')
+    + '</select></div>'
+    + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'roleTplModal\').remove()">Cancel</button>'
+    + '<button class="btn btn-primary" onclick="applyRoleTemplate()">Create role</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function applyRoleTemplate() {
+  var tid = document.getElementById('roleTplSel').value;
+  var tpl = getRoleTemplates().find(function(t){ return t.id === tid; });
+  if (!tpl) return;
+  document.getElementById('roleTplModal').remove();
+  // Create a draft role from the template fields, then open it for editing
+  var pipeline = loadPipeline();
+  var newRole = Object.assign({}, tpl.fields, {
+    id: 'pr_' + Date.now(),
+    created: todayStr(),
+    stage: 'request',
+    stageHistory: [{ stage: 'request', date: todayStr() }]
+  });
+  pipeline.push(newRole);
+  savePipeline(pipeline);
+  openPositionRequest('onboarding', newRole.id);
+}
+
 // ── RECRUITMENT ACTIONS ───────────────────────────────────────────────────
 function setRecruitAction(key, val) {
   appSettings.recruitActions = appSettings.recruitActions || {};
@@ -13631,6 +13750,7 @@ function renderRecruitment() {
             List
           </button>
         </div>
+        <button class="btn" onclick="newRoleFromTemplate()" title="Create a role from a saved template">☆ From template</button>
         <button class="btn btn-primary" onclick="openPositionRequest('onboarding')">
           <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Position Request
@@ -13823,12 +13943,18 @@ function renderKanban(items) {
   </div>`;
 }
 
+function roleLabelPill(item) {
+  if (!item.label) return '';
+  var c = item.labelColor || '#3B82F6';
+  return '<span class="kc-tag" style="background:'+c+'1A;color:'+c+';font-weight:700;">'+item.label+'</span>';
+}
 function kanbanCard(item, stage) {
   const nextStage = PIPELINE_STAGES[PIPELINE_STAGES.findIndex(s=>s.id===stage.id)+1];
   return `<div class="kanban-card" onclick="openPipelineDetail('${item.id}')">
     <div class="kc-title">${item.position}</div>
     <div class="kc-sub">${[item.dept, item.empType].filter(Boolean).join(' · ')}</div>
     <div class="kc-tags">
+      ${roleLabelPill(item)}
       ${item.classification?`<span class="kc-tag" style="background:#EEF0FB;color:#5B6EA6;">${item.classification}</span>`:''}
       ${item.approval==='Approved — proceed to recruit'?`<span class="kc-tag" style="background:var(--teal-lt);color:var(--teal);">✓ Approved</span>`:''}
     </div>
@@ -13851,7 +13977,7 @@ function renderPipelineList(items) {
       return `<div class="pl-row" onclick="openPipelineDetail('${item.id}')">
         <div class="pl-stage-dot" style="background:${stage.color};"></div>
         <div class="pl-info">
-          <div class="pl-title">${item.position}</div>
+          <div class="pl-title">${item.position} ${item.label?`<span style="font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:10px;background:${(item.labelColor||'#3B82F6')}1A;color:${item.labelColor||'#3B82F6'};margin-left:4px;">${item.label}</span>`:''}</div>
           <div class="pl-sub">${[item.dept, item.classification, item.empType].filter(Boolean).join(' · ')}</div>
         </div>
         <span class="pl-stage" style="background:${stage.bg};color:${stage.color};">${stage.label}</span>
@@ -15787,6 +15913,7 @@ if (window._firebaseReady) {
       <button class="btn btn-primary" id="pdAdvanceBtn" onclick="advancePipelineFromModal()"></button>
       <button class="btn" onclick="editPipelineItem()">Edit</button>
       <button class="btn" onclick="duplicateRole()">⧉ Duplicate</button>
+      <button class="btn" onclick="saveRoleAsTemplate(viewingPipelineId)">☆ Save as template</button>
       <button class="btn btn-danger" onclick="deletePipelineItem()">Delete</button>
       <div style="flex:1;"></div>
       <button class="btn" id="pdOnboardBtn" style="display:none;" onclick="createOnboardingFromPipeline()">
