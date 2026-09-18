@@ -5432,7 +5432,8 @@ function resolveEntityFields(entity, entityType) {
     if (f.type === 'classification') expandAwardAttributes('', val, values);
     if (f.type === 'manager' || f.type === 'person' || /\bmanager\b/i.test(f.label||'')) {
       var prefix = f.refPrefix || (/(\bmanager\b)/i.test(f.label||'') ? 'MANAGER' : f.label.toUpperCase().trim());
-      var expandIds = f.refExpand || ['pf_position','pf_email','pf_mobile'];
+      // If no explicit expansion configured, pull ALL of the manager's profile fields
+      var expandIds = (f.refExpand && f.refExpand.length) ? f.refExpand : getProfileFields().map(function(pf){ return pf.id; });
       expandPersonReference(val, prefix, expandIds, values);
       if (!values['MANAGER'] && /\bmanager\b/i.test(f.label||'')) values['MANAGER'] = values[prefix] || val;
     }
@@ -5440,24 +5441,19 @@ function resolveEntityFields(entity, entityType) {
 
   // ── One-up / Two-up manager chain (recruitment approvals) ──
   // One-up = the manager on this candidate/entity. Two-up = that manager's own manager (from People).
+  // Both get the FULL profile expansion (title, preferred name, phone, and any custom field).
   var oneUpVal = values['MANAGER'] || values['REPORTING MANAGER'] || '';
   if (oneUpVal) {
+    var allProfileIds = getProfileFields().map(function(pf){ return pf.id; });
     var oneUpPerson = getPersonById(oneUpVal);
-    var oneUpName = oneUpPerson ? getEntityDisplayName(oneUpPerson, getProfileFields()) : oneUpVal;
-    values['ONE UP MANAGER'] = oneUpName;
+    // {{ONE UP MANAGER}} + {{ONE UP MANAGER <FIELD>}} for every profile field
+    expandPersonReference(oneUpVal, 'ONE UP MANAGER', allProfileIds, values);
     if (oneUpPerson) {
-      var oupEmail = readEntityFieldValue(oneUpPerson, getProfileFields().find(function(f){return /email/i.test(f.label);})||{});
-      if (oupEmail) values['ONE UP MANAGER EMAIL'] = oupEmail;
-      // Two-up = one-up's manager
+      // Two-up = one-up's own manager
       var oupMgrField = getProfileFields().find(function(f){ return /\bmanager\b/i.test(f.label); });
       var twoUpVal = oupMgrField ? readEntityFieldValue(oneUpPerson, oupMgrField) : '';
       if (twoUpVal) {
-        var twoUpPerson = getPersonById(twoUpVal);
-        values['TWO UP MANAGER'] = twoUpPerson ? getEntityDisplayName(twoUpPerson, getProfileFields()) : twoUpVal;
-        if (twoUpPerson) {
-          var tupEmail = readEntityFieldValue(twoUpPerson, getProfileFields().find(function(f){return /email/i.test(f.label);})||{});
-          if (tupEmail) values['TWO UP MANAGER EMAIL'] = tupEmail;
-        }
+        expandPersonReference(twoUpVal, 'TWO UP MANAGER', allProfileIds, values);
       }
     }
   }
@@ -7550,9 +7546,19 @@ function getAllPlaceholders() {
   // Recruitment placeholders
   add('Applicant Name', 'Recruitment', 'text');
   add('One Up Manager', 'Recruitment', 'text');
+  add('One Up Manager Preferred Name', 'Recruitment', 'text');
+  add('One Up Manager Title', 'Recruitment', 'text');
   add('One Up Manager Email', 'Recruitment', 'text');
+  add('One Up Manager Phone', 'Recruitment', 'text');
   add('Two Up Manager', 'Recruitment', 'text');
+  add('Two Up Manager Preferred Name', 'Recruitment', 'text');
+  add('Two Up Manager Title', 'Recruitment', 'text');
   add('Two Up Manager Email', 'Recruitment', 'text');
+  add('Two Up Manager Phone', 'Recruitment', 'text');
+  add('Manager Title', 'Manager', 'text');
+  add('Manager Email', 'Manager', 'text');
+  add('Manager Phone', 'Manager', 'text');
+  add('Manager Preferred Name', 'Manager', 'text');
   add('Reference Check Table', 'Recruitment', 'text');
   add('Referee Name', 'Recruitment', 'text');
   add('Referee Email', 'Recruitment', 'text');
@@ -9951,6 +9957,9 @@ function expandPersonReference(personIdOrName, prefix, expandFieldIds, values) {
     if (/email/i.test(def.label)) values[PRE + ' EMAIL'] = v;
     if (/mobile|phone/i.test(def.label)) values[PRE + ' PHONE'] = v;
     if (/department|team/i.test(def.label)) values[PRE + ' DEPARTMENT'] = v;
+    if (/preferred/i.test(def.label)) values[PRE + ' PREFERRED NAME'] = v;
+    if (/first|given/i.test(def.label)) values[PRE + ' FIRST NAME'] = v;
+    if (/last name|surname|family/i.test(def.label)) values[PRE + ' LAST NAME'] = v;
   });
   return values;
 }
@@ -13737,7 +13746,7 @@ function renderRecruitment() {
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
       <div>
         <h2 style="font-size:19px;font-weight:600;letter-spacing:-.3px;">Recruitment Pipeline</h2>
-        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${items.length} open position${items.length!==1?'s':''}${archivedCount?` · <a href="#" onclick="showArchivedRoles();return false;" style="color:var(--text3);">${archivedCount} archived</a>`:''} · <a href="#" onclick="recruitmentView='pool';renderRecruitment();return false;" style="color:var(--teal);">★ Talent Pool${poolCount?' ('+poolCount+')':''}</a></p>
+        <p style="font-size:13px;color:var(--text2);margin-top:2px;">${items.length} open position${items.length!==1?'s':''} · <a href="#" onclick="showArchivedRoles();return false;" style="color:var(--text3);">${archivedCount} archived</a> · <a href="#" onclick="recruitmentView='pool';renderRecruitment();return false;" style="color:var(--teal);">★ Talent Pool${poolCount?' ('+poolCount+')':''}</a></p>
       </div>
       <div style="display:flex;gap:8px;">
         <div style="display:flex;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;">
@@ -13906,7 +13915,11 @@ function showArchivedRoles() {
           + '<div style="font-size:13px;font-weight:600;color:var(--text);">' + (r.position||'Untitled role') + '</div>'
           + '<div style="font-size:11.5px;color:var(--text3);">' + [r.hiredCandidate?'Hired: '+r.hiredCandidate:'', r.archivedDate?'Archived '+r.archivedDate:''].filter(Boolean).join(' · ') + '</div>'
           + '</div>'
+          + '<div style="display:flex;gap:6px;flex-shrink:0;">'
+          + '<button class="btn btn-sm" onclick="document.getElementById(\'archivedModal\').remove();openPipelineDetail(\''+r.id+'\')" style="font-size:11px;">Open</button>'
           + '<button class="btn btn-sm" onclick="unarchiveRole(\''+r.id+'\')" style="font-size:11px;">Restore</button>'
+          + '<button class="btn btn-sm" onclick="deleteArchivedRole(\''+r.id+'\')" style="font-size:11px;color:var(--red);">Delete</button>'
+          + '</div>'
           + '</div>';
       }).join('')
     + '<div class="modal-footer"><button class="btn" onclick="document.getElementById(\'archivedModal\').remove()">Close</button></div>'
@@ -13914,6 +13927,15 @@ function showArchivedRoles() {
   var wrap = document.createElement('div');
   wrap.innerHTML = html;
   document.body.appendChild(wrap.firstChild);
+}
+function deleteArchivedRole(id) {
+  if (!confirm('Permanently delete this archived role and its candidates? This cannot be undone.')) return;
+  savePipeline(loadPipeline().filter(function(x){ return x.id !== id; }));
+  // Remove its candidates too
+  try { var all = JSON.parse(localStorage.getItem('er_candidates')||'{}'); delete all[id]; localStorage.setItem('er_candidates', JSON.stringify(all)); } catch(e){}
+  var m = document.getElementById('archivedModal'); if (m) m.remove();
+  renderRecruitment();
+  toast('Archived role deleted');
 }
 function unarchiveRole(id) {
   var pipeline = loadPipeline();
@@ -14107,11 +14129,11 @@ function deleteSchedulePreset(idx){ var presets=getSchedulePresets(); presets.sp
 
 function getEntityDisplayName(entity, fieldDefs) {
   if (!entity) return '';
+  // Fast paths — common explicit fields
   if (entity.cand_name) return entity.cand_name;
   if (entity.pf_fullname) return entity.pf_fullname;
   var first = '', last = '', full = '', preferred = '';
   var readVal = function(f) {
-    // Read by fid, then any alias IDs
     if (entity[f.id] != null && entity[f.id] !== '') return entity[f.id];
     var aliases = f.aliasIds || [];
     for (var i = 0; i < aliases.length; i++) if (entity[aliases[i]]) return entity[aliases[i]];
@@ -14119,16 +14141,41 @@ function getEntityDisplayName(entity, fieldDefs) {
   };
   (fieldDefs || []).forEach(function(f) {
     var v = readVal(f);
-    if (!v) return;
+    if (!v || typeof v !== 'string') return;
     var lbl = (f.label||'').toLowerCase();
-    if (/full name/.test(lbl)) full = v;
-    else if (/last name|surname|family name/.test(lbl)) last = v;
-    else if (/preferred/.test(lbl)) preferred = v;
-    else if (/first|given/.test(lbl)) first = v;
+    if (/full name/.test(lbl)) full = full || v;
+    else if (/last name|surname|family name/.test(lbl)) last = last || v;
+    else if (/preferred/.test(lbl)) preferred = preferred || v;
+    else if (/first|given/.test(lbl)) first = first || v;
   });
   if (full) return full;
   var name = [(preferred||first), last].filter(Boolean).join(' ').trim();
-  return name || preferred || first || last || '';
+  if (name) return name;
+  // ── Fallback 1: scan common field ids directly (covers old/custom records) ──
+  var idCandidates = ['cand_name','cand_fullname','pf_fullname','name','fullName','full_name',
+    'cand_preferred','pf_preferred','preferred','cand_first','pf_first','first_name','firstName',
+    'cand_last','pf_last','last_name','lastName','surname'];
+  var f2='', l2='', full2='', pref2='';
+  idCandidates.forEach(function(k){
+    var v = entity[k];
+    if (!v || typeof v !== 'string') return;
+    if (/full|name$/i.test(k) && !/first|last|preferred/i.test(k)) full2 = full2 || v;
+    else if (/preferred/i.test(k)) pref2 = pref2 || v;
+    else if (/first/i.test(k)) f2 = f2 || v;
+    else if (/last|surname/i.test(k)) l2 = l2 || v;
+  });
+  if (full2) return full2;
+  var n2 = [(pref2||f2), l2].filter(Boolean).join(' ').trim();
+  if (n2) return n2;
+  // ── Fallback 2: scan ALL string values for any key containing "name" ──
+  var nameKey = Object.keys(entity).find(function(k){
+    return /name/i.test(k) && typeof entity[k] === 'string' && entity[k].trim() && !/preferred|user|file|company|role|position/i.test(k);
+  });
+  if (nameKey) return entity[nameKey];
+  // ── Fallback 3: email local-part as a last resort ──
+  var email = entity.cand_email || entity.pf_email || entity.email || '';
+  if (email && email.indexOf('@') > 0) return email.split('@')[0];
+  return '';
 }
 
 function openPipelineDetail(id) {
@@ -14187,6 +14234,7 @@ function openPipelineDetail(id) {
       + stageActionButtons(id, c)
       + '<button onclick="event.stopPropagation();addCandidateToPool(\''+id+'\',\''+c.id+'\')" title="Add to talent pool" style="font-size:11px;padding:4px 8px;border:1px solid var(--border);background:white;color:var(--text2);border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">★ Pool</button>'
       + '<button onclick="event.stopPropagation();confirmProgressToOnboarding(\''+id+'\',\''+c.id+'\')" title="Progress to onboarding" style="font-size:11px;padding:4px 8px;border:1px solid var(--teal);background:var(--teal);color:white;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">→ Onboard</button>'
+      + '<button onclick="event.stopPropagation();deleteCandidate(\''+id+'\',\''+c.id+'\')" title="Delete candidate" style="font-size:12px;padding:4px 7px;border:1px solid var(--border);background:white;color:var(--red);border-radius:var(--r-sm);cursor:pointer;flex-shrink:0;">✕</button>'
       + '</div>';
   }
 
