@@ -4125,6 +4125,13 @@ function buildAndDownloadEml(name, subject, bodyText, bodyHtml, attachments, toA
   toast('Downloaded — double-click the .eml file to open in Outlook as a draft');
 }
 
+// Open an email for review before sending. A browser can't force Outlook open,
+// but the .eml carries X-Unsent so it opens AS A DRAFT when you open the file.
+function openEmlInClient(name, subject, bodyText, bodyHtml, toAddr, ccAddr) {
+  buildAndDownloadEml(name, subject, bodyText, bodyHtml, [], toAddr, ccAddr);
+}
+
+
 // ── KB RENDER ─────────────────────────────────────────────────────────────
 function renderKbDetailInto(target, item) {
   // Render KB detail into a specific element (used when sub-nav must be preserved)
@@ -5390,6 +5397,30 @@ function resolveEntityFields(entity, entityType) {
       if (!values['MANAGER'] && /\bmanager\b/i.test(f.label||'')) values['MANAGER'] = values[prefix] || val;
     }
   });
+
+  // ── One-up / Two-up manager chain (recruitment approvals) ──
+  // One-up = the manager on this candidate/entity. Two-up = that manager's own manager (from People).
+  var oneUpVal = values['MANAGER'] || values['REPORTING MANAGER'] || '';
+  if (oneUpVal) {
+    var oneUpPerson = getPersonById(oneUpVal);
+    var oneUpName = oneUpPerson ? getEntityDisplayName(oneUpPerson, getProfileFields()) : oneUpVal;
+    values['ONE UP MANAGER'] = oneUpName;
+    if (oneUpPerson) {
+      var oupEmail = readEntityFieldValue(oneUpPerson, getProfileFields().find(function(f){return /email/i.test(f.label);})||{});
+      if (oupEmail) values['ONE UP MANAGER EMAIL'] = oupEmail;
+      // Two-up = one-up's manager
+      var oupMgrField = getProfileFields().find(function(f){ return /\bmanager\b/i.test(f.label); });
+      var twoUpVal = oupMgrField ? readEntityFieldValue(oneUpPerson, oupMgrField) : '';
+      if (twoUpVal) {
+        var twoUpPerson = getPersonById(twoUpVal);
+        values['TWO UP MANAGER'] = twoUpPerson ? getEntityDisplayName(twoUpPerson, getProfileFields()) : twoUpVal;
+        if (twoUpPerson) {
+          var tupEmail = readEntityFieldValue(twoUpPerson, getProfileFields().find(function(f){return /email/i.test(f.label);})||{});
+          if (tupEmail) values['TWO UP MANAGER EMAIL'] = tupEmail;
+        }
+      }
+    }
+  }
 
   // Compute composite fields from the other resolved values (done last, after all values are set)
   fieldDefs.forEach(function(f) {
@@ -7476,6 +7507,15 @@ function getAllPlaceholders() {
   add('Ordinary Hours', 'Schedule', 'text');
   add('Work Schedule', 'Schedule', 'schedule');
   add('Work Schedule Summary', 'Schedule', 'text');
+  // Recruitment placeholders
+  add('Applicant Name', 'Recruitment', 'text');
+  add('One Up Manager', 'Recruitment', 'text');
+  add('One Up Manager Email', 'Recruitment', 'text');
+  add('Two Up Manager', 'Recruitment', 'text');
+  add('Two Up Manager Email', 'Recruitment', 'text');
+  add('Reference Check Table', 'Recruitment', 'text');
+  add('Referee Name', 'Recruitment', 'text');
+  add('Referee Email', 'Recruitment', 'text');
   // 2. ALL form field sources — so every form field is a placeholder option
   (typeof getProfileFields==='function'?getProfileFields():[]).forEach(function(f){ add(f.label, 'People', f.type, f.options); });
   (typeof getCandidateFields==='function'?getCandidateFields():[]).forEach(function(f){ add(f.label, 'Candidate', f.type, f.options); });
@@ -11948,6 +11988,7 @@ function renderSettings() {
     { id:'locations',       label:'Office Locations' },
     { id:'awards',          label:'Awards & Classifications' },
     { id:'candStages',      label:'Candidate Stages' },
+    { id:'recruitActions',  label:'Recruitment Actions' },
     { id:'schedPresets',    label:'Schedule Presets' },
     { id:'adviser',         label:'ER Adviser / Signatory' },
     { id:'appearance',      label:'Appearance' },
@@ -12476,6 +12517,26 @@ function renderSettingsSection() {
     return;
   }
 
+  if (settingsSection === 'recruitActions') {
+    var ra = appSettings.recruitActions || {};
+    var emailTpls = data.templates.filter(function(t){ return t.format === 'email' || t.format === 'letter'; });
+    var wordTpls = getWordTemplates();
+    var tplSelect = function(key, label, includeWord) {
+      var opts = '<option value="">— Not set —</option>';
+      opts += '<optgroup label="Email/Letter templates">' + emailTpls.map(function(t){ return '<option value="tpl:'+t.id+'"'+(ra[key]==='tpl:'+t.id?' selected':'')+'>'+t.name+'</option>'; }).join('') + '</optgroup>';
+      if (includeWord && wordTpls.length) opts += '<optgroup label="Word merge templates">' + wordTpls.map(function(t){ return '<option value="word:'+t.id+'"'+(ra[key]==='word:'+t.id?' selected':'')+'>'+t.name+' (Word)</option>'; }).join('') + '</optgroup>';
+      return '<div class="form-field" style="margin-bottom:12px;"><label>'+label+'</label><select onchange="setRecruitAction(\''+key+'\',this.value)">'+opts+'</select></div>';
+    };
+    el.innerHTML = `<div class="settings-section">
+      <h3>Recruitment Actions</h3>
+      <p>Assign a template to each recruitment action. The action buttons on candidates in the role view will use these automatically.</p>
+      ${tplSelect('reference', 'Reference request email', false)}
+      ${tplSelect('approval', 'Approval request email (to one-up & two-up managers)', false)}
+      ${tplSelect('contract', 'Contract / offer (Word merge template)', true)}
+    </div>`;
+    return;
+  }
+
   if (settingsSection === 'candStages') {
     var stages = getCandidateStages();
     el.innerHTML = `<div class="settings-section">
@@ -12882,6 +12943,93 @@ function removeFromPool(poolId) {
 }
 
 // Set a candidate's stage
+// ── RECRUITMENT ACTIONS ───────────────────────────────────────────────────
+function setRecruitAction(key, val) {
+  appSettings.recruitActions = appSettings.recruitActions || {};
+  appSettings.recruitActions[key] = val;
+  saveSettings();
+}
+function getRecruitAction(key) {
+  return (appSettings.recruitActions || {})[key] || '';
+}
+
+// Resolve a candidate + role into a full values map (for recruitment action emails/docs)
+function candidateActionValues(roleId, candId) {
+  var cand = getCandidates(roleId).find(function(x){ return x.id === candId; });
+  var role = loadPipeline().find(function(x){ return x.id === roleId; });
+  var vals = resolveEntityFields(cand, 'candidate');
+  vals['APPLICANT NAME'] = getEntityDisplayName(cand, getCandidateFields()) || '';
+  vals['POSITION'] = (role && role.position) || vals['POSITION'] || '';
+  vals['REFERENCE CHECK TABLE'] = renderReferenceCheckTable();
+  return { cand: cand, role: role, vals: vals };
+}
+
+// Generate & OPEN an email from an assigned template (opens compose, not silent download)
+function runActionEmail(roleId, candId, actionKey, toOverride) {
+  var assigned = getRecruitAction(actionKey);
+  if (!assigned) { alert('No template assigned for this action.\n\nSet it in Settings → Recruitment Actions.'); return; }
+  if (assigned.indexOf('word:') === 0) { runActionWord(roleId, candId, actionKey); return; }
+  var tplId = assigned.replace('tpl:', '');
+  var tpl = data.templates.find(function(t){ return t.id === tplId; });
+  if (!tpl) { alert('Assigned template not found — reassign it in Settings.'); return; }
+  var ctx = candidateActionValues(roleId, candId);
+  var saved = fieldValues;
+  fieldValues = ctx.vals;
+  var subj = (tpl.subject || tpl.name || '').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+  var bodyHtml = outlookBody(tpl, true);
+  var bodyText = bodyHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+  var to = toOverride || '';
+  if (!to && tpl.to) to = tpl.to.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; });
+  var cc = tpl.cc ? tpl.cc.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()] || fieldValues[k.trim()] || ''; }) : '';
+  fieldValues = saved;
+  openEmlInClient(tpl.name, subj, bodyText, bodyHtml, to, cc);
+}
+function runActionWord(roleId, candId, actionKey) {
+  var assigned = getRecruitAction(actionKey);
+  var wtId = assigned.replace('word:', '');
+  var ctx = candidateActionValues(roleId, candId);
+  mergeWordDoc(wtId, ctx.vals, ctx.vals['APPLICANT NAME'] || 'contract');
+}
+// Send reference request — to the candidate's referees (or prompt if none)
+function actionSendReference(roleId, candId) {
+  var referees = getCandidateReferees(roleId, candId);
+  if (!referees.length) { alert('No referees on this candidate yet. Add referees first (open the candidate).'); return; }
+  var withEmail = referees.filter(function(r){ return r.email; });
+  if (!withEmail.length) { alert('None of the referees have an email address.'); return; }
+  var to = withEmail.map(function(r){ return r.email; }).join(', ');
+  // Reference emails usually go one per referee, but per the workflow we open one addressed to referees
+  runActionEmail(roleId, candId, 'reference', to);
+}
+// Request approval — one email to BOTH one-up and two-up managers
+function actionRequestApproval(roleId, candId) {
+  var ctx = candidateActionValues(roleId, candId);
+  var toAddrs = [ctx.vals['ONE UP MANAGER EMAIL'], ctx.vals['TWO UP MANAGER EMAIL']].filter(Boolean);
+  if (!toAddrs.length) {
+    if (!confirm('No manager email addresses found (the one-up/two-up managers may not have profiles with emails). Open the email anyway with blank recipients?')) return;
+  }
+  runActionEmail(roleId, candId, 'approval', toAddrs.join(', '));
+}
+function actionGenerateContract(roleId, candId) {
+  runActionWord(roleId, candId, 'contract');
+}
+
+// Return the stage-specific action button(s) for a candidate row
+function stageActionButtons(roleId, c) {
+  var st = (c.cand_stage || '').toLowerCase();
+  var btns = '';
+  var mk = function(fn, label, title) {
+    return '<button onclick="event.stopPropagation();'+fn+'" title="'+title+'" style="font-size:11px;padding:4px 8px;border:1px solid #B8791A;background:#FEF7EC;color:#B8791A;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">'+label+'</button>';
+  };
+  if (/reference/.test(st)) {
+    btns += mk("actionSendReference('"+roleId+"','"+c.id+"')", '✉ Reference request', 'Send reference request to referees');
+  }
+  if (/offer/.test(st)) {
+    btns += mk("actionRequestApproval('"+roleId+"','"+c.id+"')", '✓ Request approval', 'Email one-up & two-up managers for approval');
+    btns += mk("actionGenerateContract('"+roleId+"','"+c.id+"')", '📄 Contract', 'Generate the offer contract (Word)');
+  }
+  return btns;
+}
+
 function setCandidateStage(roleId, candId, stage) {
   var cands = getCandidates(roleId);
   var c = cands.find(function(x){ return x.id === candId; });
@@ -13880,24 +14028,27 @@ function openPipelineDetail(id) {
       + '<div style="font-size:11.5px;color:var(--text3);">'+[c.cand_email, c.cand_notice?'Notice: '+c.cand_notice:''].filter(Boolean).join(' · ')+'</div>'
       + '</div>'
       + '<select onchange="setCandidateStage(\''+id+'\',\''+c.id+'\',this.value)" onclick="event.stopPropagation()" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:var(--r-sm);background:white;cursor:pointer;">'+stageOpts+'</select>'
+      + stageActionButtons(id, c)
       + '<button onclick="event.stopPropagation();addCandidateToPool(\''+id+'\',\''+c.id+'\')" title="Add to talent pool" style="font-size:11px;padding:4px 8px;border:1px solid var(--border);background:white;color:var(--text2);border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">★ Pool</button>'
       + '<button onclick="event.stopPropagation();confirmProgressToOnboarding(\''+id+'\',\''+c.id+'\')" title="Progress to onboarding" style="font-size:11px;padding:4px 8px;border:1px solid var(--teal);background:var(--teal);color:white;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;flex-shrink:0;">→ Onboard</button>'
       + '</div>';
   }
 
+  var stageColors = { 'applied':'#6B7280', 'phone screen':'#3B82F6', 'interview':'#8B5CF6', 'reference check':'#B8791A', 'offer':'#0EA5A5', 'hired':'#16A34A', 'discontinue':'#DC2626' };
   var stageSections = stages.map(function(s){
     var list = byStage[s];
     if (!list.length) return '';
-    return '<div style="margin-bottom:12px;">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">'
-      + '<div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text2);">'
-      + '<input type="checkbox" onclick="toggleStageCandidates(this,\''+s.replace(/'/g,"\\'")+'\')" style="accent-color:var(--teal);cursor:pointer;" title="Select all in '+s+'">'
-      + s + ' <span style="color:var(--text3);font-weight:400;">('+list.length+')</span></div></div>'
+    var col = stageColors[s.toLowerCase()] || 'var(--teal)';
+    return '<div style="margin-bottom:14px;border-left:3px solid '+col+';padding-left:10px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+      + '<div style="display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text2);">'
+      + '<input type="checkbox" onclick="toggleStageCandidates(this,\''+s.replace(/'/g,"\\'")+'\')" style="accent-color:'+col+';cursor:pointer;" title="Select all in '+s+'">'
+      + s + ' <span style="font-weight:700;padding:1px 8px;border-radius:10px;background:'+col+'1A;color:'+col+';font-size:10.5px;letter-spacing:0;">'+list.length+'</span></div></div>'
       + list.map(candRow).join('')
       + '</div>';
   }).join('');
   if (unstaged.length) {
-    stageSections += '<div style="margin-bottom:12px;"><div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:5px;">No stage set ('+unstaged.length+')</div>'+unstaged.map(candRow).join('')+'</div>';
+    stageSections += '<div style="margin-bottom:14px;border-left:3px solid var(--border);padding-left:10px;"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">No stage set <span style="font-weight:700;padding:1px 8px;border-radius:10px;background:var(--bg);color:var(--text3);">'+unstaged.length+'</span></div>'+unstaged.map(candRow).join('')+'</div>';
   }
 
   const candidatesHtml = `
@@ -13950,6 +14101,39 @@ function advancePipelineFromModal() {
   if (!viewingPipelineId) return;
   advancePipeline(viewingPipelineId);
   document.getElementById('pipelineDetailModal').classList.remove('open');
+}
+
+function duplicateRole() {
+  if (!viewingPipelineId) return;
+  var items = loadPipeline();
+  var orig = items.find(function(x){ return x.id === viewingPipelineId; });
+  if (!orig) return;
+  var newId = 'pr_' + Date.now();
+  // Copy the role
+  var copy = Object.assign({}, orig, {
+    id: newId,
+    position: (orig.position || 'Role') + ' (copy)',
+    archived: false,
+    created: todayStr(),
+    stageHistory: [{ stage: orig.stage || 'request', date: todayStr() }]
+  });
+  delete copy.hiredCandidate; delete copy.onboardingCaseId; delete copy.archivedDate;
+  items.push(copy);
+  savePipeline(items);
+  // Copy its candidates (new IDs, reset to first stage, drop referees/pool links for a fresh run)
+  var origCands = getCandidates(viewingPipelineId);
+  if (origCands.length) {
+    var firstStage = (getCandidateStages()[0]) || 'Applied';
+    var newCands = origCands.map(function(c){
+      var nc = Object.assign({}, c, { id: 'cand' + Date.now() + Math.random().toString(36).slice(2,6), cand_stage: firstStage });
+      delete nc._referees; delete nc._fromPool;
+      return nc;
+    });
+    saveCandidates(newId, newCands);
+  }
+  document.getElementById('pipelineDetailModal').classList.remove('open');
+  renderRecruitment();
+  toast('Role duplicated' + (origCands.length ? ' with ' + origCands.length + ' candidate' + (origCands.length>1?'s':'') : ''));
 }
 
 function editPipelineItem() {
@@ -15572,6 +15756,7 @@ if (window._firebaseReady) {
     <div style="display:flex;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border);flex-wrap:wrap;">
       <button class="btn btn-primary" id="pdAdvanceBtn" onclick="advancePipelineFromModal()"></button>
       <button class="btn" onclick="editPipelineItem()">Edit</button>
+      <button class="btn" onclick="duplicateRole()">⧉ Duplicate</button>
       <button class="btn btn-danger" onclick="deletePipelineItem()">Delete</button>
       <div style="flex:1;"></div>
       <button class="btn" id="pdOnboardBtn" style="display:none;" onclick="createOnboardingFromPipeline()">
