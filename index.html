@@ -11603,6 +11603,22 @@ function renderRoleFieldInput(f, existing) {
     if (val) clOpts = '<option value="' + String(val).replace(/"/g,'&quot;') + '" selected>' + val + '</option>' + clOpts;
     return label + '<select id="' + id + '" data-classification-field="' + f.id + '">' + clOpts + '</select>';
   }
+  if (f.type === 'multiselect') {
+    var selVals = String(val||'').split(/\s*,\s*/).filter(Boolean);
+    var cbs = (f.options||[]).map(function(o){ return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-bottom:3px;"><input type="checkbox" value="'+o.replace(/"/g,'&quot;')+'" class="rfms_'+f.id+'"'+(selVals.indexOf(o)!==-1?' checked':'')+'> '+o+'</label>'; }).join('');
+    return label + '<div style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">' + cbs + '</div>';
+  }
+  if (f.type === 'checklist') {
+    var selC = String(val||'').split(/\s*,\s*/).filter(Boolean);
+    var items = (f.options||[]).map(function(o){ return '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer;font-size:13px;"><input type="checkbox" value="'+o.replace(/"/g,'&quot;')+'" class="rfms_'+f.id+'"'+(selC.indexOf(o)!==-1?' checked':'')+' style="width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;"> <span>'+o+'</span></label>'; }).join('');
+    return label + '<div style="border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;background:white;">' + items + '</div>';
+  }
+  if (f.type === 'yesno') {
+    return label + '<select id="' + id + '"><option value="">—</option><option'+(val==='Yes'?' selected':'')+'>Yes</option><option'+(val==='No'?' selected':'')+'>No</option></select>';
+  }
+  if (f.type === 'composite') {
+    return label + '<input id="' + id + '" data-composite="' + (f.pattern||'').replace(/"/g,'&quot;') + '" value="' + String(val).replace(/"/g,'&quot;') + '" placeholder="Auto-fills from other fields" style="background:#FFFBF5;">';
+  }
   // Auto-detect date from label
   var norm = (f.label||'').replace(/[&\/\\|]+/g,' ').replace(/\s+/g,' ').trim();
   if (/\bdate\b/i.test(norm) && !/\bupdate\b/i.test(norm)) return label + '<input type="date" id="' + id + '" value="' + val + '">';
@@ -11621,7 +11637,9 @@ function savePositionRequest() {
     var el = document.getElementById('rf_input_' + f.id);
     var timeEl = document.getElementById('rf_input_' + f.id + '_time');
     var v = '';
-    if (timeEl) {
+    if (f.type === 'multiselect' || f.type === 'checklist') {
+      v = Array.from(document.querySelectorAll('.rfms_' + f.id + ':checked')).map(function(cb){ return cb.value; }).join(', ');
+    } else if (timeEl) {
       var d = el ? el.value : '';
       var t = timeEl.value || '';
       v = d ? (t ? (d + ' ' + t) : d) : '';
@@ -13473,6 +13491,16 @@ function renderCandidateField(f, c) {
   if(f.type === 'date') return label + '<input type="date" id="' + id + '" value="' + val + '">';
   if(f.type === 'datetime') return label + '<div style="display:flex;gap:6px;"><input type="date" id="' + id + '" value="' + (val.split(' ')[0]||'') + '"><input type="time" id="' + id + '_time" value="' + (val.split(' ')[1]||'') + '" style="width:110px;"></div>';
   if(f.type === 'number') return label + '<input type="number" id="' + id + '" value="' + val.replace(/"/g,'&quot;') + '">';
+  if(f.type === 'multiselect') {
+    var msSel = String(val||'').split(/\s*,\s*/).filter(Boolean);
+    var msc = (f.options||[]).map(function(o){ return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-bottom:3px;"><input type="checkbox" value="'+o.replace(/"/g,'&quot;')+'" class="candms_'+f.id+'"'+(msSel.indexOf(o)!==-1?' checked':'')+'> '+o+'</label>'; }).join('');
+    return label + '<div style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);">' + msc + '</div>';
+  }
+  if(f.type === 'checklist') {
+    var clSel = String(val||'').split(/\s*,\s*/).filter(Boolean);
+    var clItems = (f.options||[]).map(function(o){ return '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer;font-size:13px;"><input type="checkbox" value="'+o.replace(/"/g,'&quot;')+'" class="candms_'+f.id+'"'+(clSel.indexOf(o)!==-1?' checked':'')+' style="width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;"> <span>'+o+'</span></label>'; }).join('');
+    return label + '<div style="border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;background:white;">' + clItems + '</div>';
+  }
   if(f.type === 'composite') return label + '<input id="' + id + '" data-composite="' + (f.pattern||'').replace(/"/g,'&quot;') + '" value="' + val.replace(/"/g,'&quot;') + '" placeholder="Auto-fills from other fields" style="background:#FFFBF5;"><div style="font-size:10px;color:var(--text3);margin-top:2px;">Auto-composed — edit to override</div>';
   if(f.type === 'schedule') return label + '<div id="' + id + '_wrap">' + renderScheduleEditor(id, parseSchedule(val), '') + '</div>';
 
@@ -13495,7 +13523,9 @@ function saveCandidate() {
   fields.forEach(function(f) {
     var el = document.getElementById('cand_input_' + f.id);
     var timeEl = document.getElementById('cand_input_' + f.id + '_time');
-    if (timeEl) {
+    if (f.type === 'multiselect' || f.type === 'checklist') {
+      candidate[f.id] = Array.from(document.querySelectorAll('.candms_' + f.id + ':checked')).map(function(cb){ return cb.value; }).join(', ');
+    } else if (timeEl) {
       var d = el ? el.value : '';
       var t = timeEl.value || '';
       candidate[f.id] = d ? (t ? (d + ' ' + t) : d) : '';
