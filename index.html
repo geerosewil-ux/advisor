@@ -766,6 +766,10 @@ nav{height:54px;background:var(--slate);display:flex;align-items:center;padding:
       <svg style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       People
     </button>
+    <button class="nav-tab" id="tabCalendar" onclick="switchTab('calendar',this)">
+      <svg style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Calendar
+    </button>
   <div class="nav-right">
     <div id="autoSaveIndicator" style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:rgba(255,255,255,.45);padding:0 8px;pointer-events:none;">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
@@ -2393,6 +2397,14 @@ function switchTab(tab, el) {
     return;
   }
 
+  if (tab === 'calendar') {
+    document.getElementById('sidebar').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+    renderCalendar();
+    return;
+  }
+
   if (tab === 'settings') {
     if (gear) gear.style.background = 'rgba(255,255,255,.15)';
     renderSettings();
@@ -3180,7 +3192,14 @@ function outlookBody(item, forSend) {
         return `<tr><td width="18" valign="top" style="font-family:${ff};font-size:${fs};color:#4A5568;padding-top:2px;">${checked}</td><td style="font-family:${ff};font-size:${fs};line-height:${T.lineHeight};color:${fc};">${text}</td></tr>`;
       }
       if (tag === 'table') {
-        // Pass through tables with inline styles (preserve colspan for schedule totals etc.)
+        // If the table already carries inline styling (e.g. schedule/reference tables
+        // we build ourselves), pass it through UNTOUCHED so it isn't re-styled into a mess.
+        var hasOwnStyle = (node.getAttribute('style')||'').indexOf('border-collapse') !== -1
+          || Array.from(node.querySelectorAll('td,th')).some(function(c){ return (c.getAttribute('style')||'').length > 20; });
+        if (hasOwnStyle) {
+          return node.outerHTML;
+        }
+        // Otherwise, apply the standard template table styling (user-drawn tables).
         return `<table width="100%" cellpadding="6" cellspacing="0" border="0" style="margin:8px 0;border-collapse:collapse;">${
           Array.from(node.querySelectorAll('tr')).map(tr =>
             `<tr>${Array.from(tr.querySelectorAll('th,td')).map(cell => {
@@ -3606,41 +3625,46 @@ function gatherMergeRecipients() {
   var seen = {};
   var pfDefs = getProfileFields();
   var candDefs = getCandidateFields();
+  var pipeline = loadPipeline();
+  var activeRoleIds = {};
+  pipeline.forEach(function(r){ if (!r.archived) activeRoleIds[r.id] = true; });
+  var roleName = function(rid){ var r = pipeline.find(function(x){ return x.id===rid; }); return r ? (r.position||'Role') : ''; };
   // People
   getPeople().forEach(function(p){
     var nm = getEntityDisplayName(p, pfDefs) || 'Unnamed';
     var email = p.pf_email || '';
     var key = (nm+'|'+email).toLowerCase();
     if (seen[key]) return; seen[key] = 1;
-    out.push({ kind:'person', id:p.id, name:nm, email:email, sub:(p.pf_position||''), entity:p, entityType:'people' });
+    out.push({ kind:'person', id:p.id, name:nm, email:email, sub:(p.pf_position||''), entity:p, entityType:'people', active:true });
   });
-  // Candidates across all roles
+  // Candidates across all roles — mark whether their role is active
   var allCands = getCandidates();
   Object.keys(allCands||{}).forEach(function(roleId){
+    var isActive = !!activeRoleIds[roleId];
     (allCands[roleId]||[]).forEach(function(c){
       var nm = getEntityDisplayName(c, candDefs) || 'Unnamed';
       var email = c.cand_email || '';
       var key = (nm+'|'+email).toLowerCase();
       if (seen[key]) return; seen[key] = 1;
-      out.push({ kind:'candidate', id:c.id, name:nm, email:email, sub:'Candidate', entity:c, entityType:'candidate' });
+      out.push({ kind:'candidate', id:c.id, name:nm, email:email, sub:roleName(roleId)+(isActive?'':' (archived)'), entity:c, entityType:'candidate', active:isActive });
     });
   });
-  // Talent pool
+  // Talent pool — always searchable, marked inactive so hidden by default
   getTalentPool().forEach(function(p){
     var nm = getEntityDisplayName(p, candDefs) || 'Unnamed';
     var email = p.cand_email || '';
     var key = (nm+'|'+email).toLowerCase();
     if (seen[key]) return; seen[key] = 1;
-    out.push({ kind:'pool', id:p.id, name:nm, email:email, sub:'Talent pool', entity:p, entityType:'candidate' });
+    out.push({ kind:'pool', id:p.id, name:nm, email:email, sub:'Talent pool', entity:p, entityType:'candidate', active:false });
   });
-  // Case employees
+  // Case employees — active
   loadCases().forEach(function(c){
     var nm = c.employee || '';
     if (!nm) return;
     var email = (c._dynValues && (c._dynValues['EMAIL'] || c._dynValues['Email'])) || '';
     var key = (nm+'|'+email).toLowerCase();
     if (seen[key]) return; seen[key] = 1;
-    out.push({ kind:'case', id:c.id, name:nm, email:email, sub:'Case', entity:c, entityType:'case' });
+    out.push({ kind:'case', id:c.id, name:nm, email:email, sub:'Case', entity:c, entityType:'case', active:true });
   });
   return out;
 }
@@ -3977,9 +4001,10 @@ function openMergePicker(tplId) {
   var rows = '';
   ['person','candidate','pool','case'].forEach(function(g){
     if (!groups[g].length) return;
-    rows += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin:8px 0 4px;">'+groupLabels[g]+' ('+groups[g].length+')</div>';
+    rows += '<div class="merge-group-head" data-group="'+g+'" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin:8px 0 4px;">'+groupLabels[g]+'</div>';
     rows += groups[g].map(function(r){
-      return '<label style="display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:5px;">'
+      var hideDefault = r.active === false; // inactive/archived/pool hidden until searched
+      return '<label data-active="'+(r.active===false?'0':'1')+'" style="display:'+(hideDefault?'none':'flex')+';align-items:center;gap:9px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:5px;">'
         + '<input type="checkbox" class="merge-check" data-idx="'+r._i+'" style="accent-color:var(--teal);width:16px;height:16px;" onchange="updateMergeCount()">'
         + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+r.name+'</div>'
         + '<div style="font-size:11px;color:var(--text3);">'+(r.email||'<span style="color:var(--red);">no email</span>')+(r.sub?' · '+r.sub:'')+'</div></div>'
@@ -3990,7 +4015,7 @@ function openMergePicker(tplId) {
     + '<div class="modal-title">Send to multiple — individual emails</div>'
     + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 10px;">Each selected person gets their own .eml file, personalised from their record (e.g. "Hi {{PREFERRED NAME}}" fills with their name).</p>'
     + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
-    + '<input id="mergeSearch" placeholder="Search…" oninput="filterMergeList(this.value)" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12.5px;">'
+    + '<input id="mergeSearch" placeholder="Type to search all (incl. archived)…" oninput="filterMergeList(this.value)" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);font-size:12.5px;">'
     + '<button class="btn btn-sm" onclick="toggleAllMerge(true)">All</button>'
     + '<button class="btn btn-sm" onclick="toggleAllMerge(false)">None</button>'
     + '</div>'
@@ -4001,6 +4026,7 @@ function openMergePicker(tplId) {
     + '<button class="btn btn-primary" onclick="runMergeEmail(\''+tplId+'\')">Generate emails</button></div>'
     + '</div></div></div>';
   var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+  filterMergeList(''); // hide inactive/archived until searched
 }
 function updateMergeCount() {
   var n = document.querySelectorAll('.merge-check:checked').length;
@@ -4011,9 +4037,25 @@ function toggleAllMerge(on) {
   updateMergeCount();
 }
 function filterMergeList(q) {
-  q = (q||'').toLowerCase();
+  q = (q||'').toLowerCase().trim();
   document.querySelectorAll('#mergeList label').forEach(function(l){
-    l.style.display = l.textContent.toLowerCase().includes(q) ? '' : 'none';
+    var isActive = l.getAttribute('data-active') === '1';
+    if (q) {
+      // When searching, show any match regardless of active state
+      l.style.display = l.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+    } else {
+      // No search: only active recipients
+      l.style.display = isActive ? 'flex' : 'none';
+    }
+  });
+  // Hide group headers that have no visible items
+  document.querySelectorAll('#mergeList .merge-group-head').forEach(function(h){
+    var sib = h.nextElementSibling, anyVisible = false;
+    while (sib && sib.tagName === 'LABEL') {
+      if (sib.style.display !== 'none') { anyVisible = true; break; }
+      sib = sib.nextElementSibling;
+    }
+    h.style.display = anyVisible ? 'block' : 'none';
   });
 }
 function runMergeEmail(tplId) {
@@ -9679,6 +9721,82 @@ function savePeople(people) {
   fsSet('people', 'main', people);
 }
 
+// ── PROFILE LAYOUT (how the People profile displays — independent of the form) ──
+function getProfileLayout() {
+  if (appSettings.profileLayout && appSettings.profileLayout.tabs) return appSettings.profileLayout;
+  // Default layout derived from profile field groups
+  var pf = getProfileFields();
+  var groups = [];
+  pf.forEach(function(f){ var g = f.group || 'Details'; if (groups.indexOf(g) < 0) groups.push(g); });
+  return {
+    keyFields: pf.filter(function(f){ return /email|manager|position|start/i.test(f.label); }).slice(0,6).map(function(f){ return f.fid || f.id; }),
+    tabs: [{ name: 'Overview', fieldIds: [] }].concat(groups.map(function(g){
+      return { name: g, fieldIds: pf.filter(function(f){ return (f.group||'Details') === g; }).map(function(f){ return f.fid || f.id; }) };
+    }))
+  };
+}
+function saveProfileLayout(layout) { appSettings.profileLayout = layout; saveSettings(); }
+
+// ── HISTORY LOG (auto timeline per person) ──
+function addHistory(personId, event, detail) {
+  if (!personId) return;
+  var people = getPeople();
+  var p = people.find(function(x){ return x.id === personId; });
+  if (!p) return;
+  if (!p._history) p._history = [];
+  p._history.push({ date: todayStr(), ts: Date.now(), event: event, detail: detail || '' });
+  savePeople(people);
+}
+
+// ── CALENDAR DATE FIELD NOMINATIONS ──
+function getCalendarDates() {
+  return appSettings.calendarDates || [];  // [{label, color}]
+}
+function saveCalendarDates(list) { appSettings.calendarDates = list; saveSettings(); }
+
+// Profile Layout editor helpers (operate on the Settings UI)
+var _plEditTabs = null;
+function plGetLayoutFromUI() {
+  var keyFields = Array.from(document.querySelectorAll('#plKeyFields input:checked')).map(function(cb){ return cb.getAttribute('data-fid'); });
+  var tabs = [{ name:'Overview', fieldIds: [] }];
+  document.querySelectorAll('#plTabs [data-tab]').forEach(function(tabEl){
+    var name = (tabEl.querySelector('.pl-tab-name')||{}).value || 'Tab';
+    var fieldIds = Array.from(tabEl.querySelectorAll('.pl-tab-fields input:checked')).map(function(cb){ return cb.getAttribute('data-fid'); });
+    tabs.push({ name: name.trim(), fieldIds: fieldIds });
+  });
+  return { keyFields: keyFields, tabs: tabs };
+}
+function plSaveLayout() {
+  saveProfileLayout(plGetLayoutFromUI());
+  toast('Profile layout saved');
+}
+function plAddTab() {
+  var lay = plGetLayoutFromUI();
+  lay.tabs.push({ name:'New tab', fieldIds: [] });
+  saveProfileLayout(lay);
+  renderSettingsSection();
+}
+function plRemoveTab(ti) {
+  var lay = plGetLayoutFromUI();
+  // ti indexes the non-Overview tabs shown
+  var nonOverview = lay.tabs.filter(function(t){ return t.name!=='Overview'; });
+  nonOverview.splice(ti, 1);
+  lay.tabs = [lay.tabs.find(function(t){return t.name==='Overview';})||{name:'Overview',fieldIds:[]}].concat(nonOverview);
+  saveProfileLayout(lay);
+  renderSettingsSection();
+}
+function saveCalendarDatesFromUI() {
+  var list = [];
+  document.querySelectorAll('.cd-on:checked').forEach(function(cb){
+    var lbl = cb.getAttribute('data-label');
+    var colSel = document.querySelector('.cd-color[data-label="'+lbl.replace(/"/g,'&quot;')+'"]');
+    list.push({ label: lbl, color: colSel ? colSel.value : '#3B82F6' });
+  });
+  saveCalendarDates(list);
+  toast('Calendar dates saved');
+}
+
+
 function saveQuickBlocks(qbs) {
   localStorage.setItem('er_quick_blocks', JSON.stringify(qbs));
   fsSet('quickBlocks', 'main', qbs);
@@ -9767,6 +9885,10 @@ function scheduleDayHours(day) {
   var sm = (+s[0])*60 + (+s[1]), fm = (+f[0])*60 + (+f[1]);
   var mins = fm - sm;
   if (mins <= 0) return 0;
+  // Deduct unpaid break (in minutes) if set
+  var brk = day.breakMins != null ? (+day.breakMins || 0) : 0;
+  mins -= brk;
+  if (mins < 0) mins = 0;
   return Math.round((mins/60) * 100) / 100;
 }
 function scheduleWeekHours(week) {
@@ -9844,34 +9966,38 @@ function renderScheduleTable(sched) {
   if (!weeks.length || weeks.every(function(w){ return !w.days || !Object.keys(w.days).length; })) {
     return sched.notes ? '<p style="font-family:'+ff+';font-size:15px;margin:0;">'+sched.notes+'</p>' : '';
   }
+  // Does any day have a break? Only show the Break column if so.
+  var anyBreak = weeks.some(function(w){ return SCHEDULE_DAYS.some(function(d){ return w.days && w.days[d] && w.days[d].breakMins; }); });
   var multi = weeks.length > 1;
+  var th = 'text-align:left;padding:6px 14px 6px 0;border-bottom:1px solid #333;font-weight:700;font-size:13px;';
+  var thR = 'text-align:right;padding:6px 0;border-bottom:1px solid #333;font-weight:700;font-size:13px;';
+  var td = 'padding:5px 14px 5px 0;border-bottom:0.5px solid #E2E6EC;font-size:13px;';
+  var tdR = 'padding:5px 0;border-bottom:0.5px solid #E2E6EC;text-align:right;font-size:13px;';
   var out = '';
   weeks.forEach(function(week, wi) {
     var workedDays = SCHEDULE_DAYS.filter(function(d){ return week.days && week.days[d]; });
     if (!workedDays.length) return;
-    if (multi) out += '<p style="font-family:'+ff+';font-size:14px;font-weight:700;margin:'+(wi?'14px':'0')+' 0 6px;">Week '+(wi+1)+'</p>';
-    out += '<table style="border-collapse:collapse;font-family:'+ff+';font-size:14px;margin:0 0 4px;width:auto;">'
-      + '<thead><tr>'
-      + '<th style="text-align:left;padding:5px 16px 5px 0;border-bottom:1.5px solid #333;font-weight:700;">Day</th>'
-      + '<th style="text-align:left;padding:5px 16px 5px 0;border-bottom:1.5px solid #333;font-weight:700;">Start</th>'
-      + '<th style="text-align:left;padding:5px 16px 5px 0;border-bottom:1.5px solid #333;font-weight:700;">Finish</th>'
-      + '<th style="text-align:right;padding:5px 0;border-bottom:1.5px solid #333;font-weight:700;">Hours</th>'
-      + '</tr></thead><tbody>';
+    if (multi) out += '<p style="font-family:'+ff+';font-size:13px;font-weight:700;margin:'+(wi?'12px':'0')+' 0 5px;">Week '+(wi+1)+'</p>';
+    out += '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:'+ff+';margin:0 0 6px;width:auto;max-width:100%;">'
+      + '<tr><th style="'+th+'">Day</th><th style="'+th+'">Start</th><th style="'+th+'">Finish</th>'
+      + (anyBreak ? '<th style="'+th+'">Break</th>' : '')
+      + '<th style="'+thR+'">Hours</th></tr>';
     workedDays.forEach(function(d){
       var day = week.days[d];
       var hrs = day.hours != null ? day.hours : scheduleDayHours(day);
       out += '<tr>'
-        + '<td style="padding:5px 16px 5px 0;border-bottom:0.5px solid #ddd;">'+SCHEDULE_DAY_FULL[d]+'</td>'
-        + '<td style="padding:5px 16px 5px 0;border-bottom:0.5px solid #ddd;">'+fmtTime12(day.start)+'</td>'
-        + '<td style="padding:5px 16px 5px 0;border-bottom:0.5px solid #ddd;">'+fmtTime12(day.finish)+'</td>'
-        + '<td style="padding:5px 0;border-bottom:0.5px solid #ddd;text-align:right;">'+hrs+'</td>'
+        + '<td style="'+td+'">'+SCHEDULE_DAY_FULL[d]+'</td>'
+        + '<td style="'+td+'">'+fmtTime12(day.start)+'</td>'
+        + '<td style="'+td+'">'+fmtTime12(day.finish)+'</td>'
+        + (anyBreak ? '<td style="'+td+'">'+(day.breakMins?day.breakMins+' min':'—')+'</td>' : '')
+        + '<td style="'+tdR+'">'+hrs+'</td>'
         + '</tr>';
     });
-    out += '<tr><td colspan="3" style="padding:6px 16px 0 0;font-weight:700;">Total per week</td>'
-      + '<td style="padding:6px 0 0;text-align:right;font-weight:700;">'+scheduleWeekHours(week)+'</td></tr>';
-    out += '</tbody></table>';
+    out += '<tr><td colspan="'+(anyBreak?4:3)+'" style="padding:6px 14px 0 0;font-weight:700;font-size:13px;">Total per week</td>'
+      + '<td style="padding:6px 0 0;text-align:right;font-weight:700;font-size:13px;">'+scheduleWeekHours(week)+'</td></tr>';
+    out += '</table>';
   });
-  if (sched.notes) out += '<p style="font-family:'+ff+';font-size:13px;color:#555;margin:4px 0 0;font-style:italic;">'+sched.notes+'</p>';
+  if (sched.notes) out += '<p style="font-family:'+ff+';font-size:12px;color:#555;margin:4px 0 0;font-style:italic;">'+sched.notes+'</p>';
   return out;
 }
 function renderScheduleSummary(sched) {
@@ -9992,6 +10118,97 @@ function saveProfileFields(fields) {
 var peopleSearchQ = '';
 var editingPersonId = null;
 
+// ── CALENDAR ──────────────────────────────────────────────────────────────
+var calendarView = 'agenda'; // 'month' | 'agenda'
+var calendarMonth = new Date();
+// Gather calendar events from nominated date fields across People, candidates, cases
+function gatherCalendarEvents() {
+  var noms = getCalendarDates();
+  if (!noms.length) return [];
+  var events = [];
+  var pfDefs = getProfileFields(), candDefs = getCandidateFields();
+  var pushFrom = function(entity, defs, kind, openFn, displayName) {
+    noms.forEach(function(nom){
+      var f = defs.find(function(x){ return (x.label||'').toLowerCase() === nom.label.toLowerCase(); });
+      if (!f) return;
+      var raw = entity[f.fid] || entity[f.id];
+      if (!raw && f.aliasIds) f.aliasIds.forEach(function(a){ if(!raw && entity[a]) raw = entity[a]; });
+      var iso = raw ? toISODate(raw) : '';
+      if (!iso) return;
+      events.push({ date: iso, label: nom.label, color: nom.color, name: displayName, kind: kind, openFn: openFn });
+    });
+  };
+  getPeople().forEach(function(p){ pushFrom(p, pfDefs, 'Person', "openPersonProfile('"+p.id+"')", getEntityDisplayName(p, pfDefs)||'Person'); });
+  var allCands = getCandidates();
+  Object.keys(allCands||{}).forEach(function(rid){ (allCands[rid]||[]).forEach(function(c){ pushFrom(c, candDefs, 'Candidate', "openCandidateModal('"+rid+"','"+c.id+"')", getEntityDisplayName(c, candDefs)||'Candidate'); }); });
+  loadCases().forEach(function(c){
+    var dv = c._dynValues || {};
+    noms.forEach(function(nom){
+      var raw = dv[nom.label.toUpperCase()] || dv[nom.label] || '';
+      var iso = raw ? toISODate(raw) : '';
+      if (iso) events.push({ date: iso, label: nom.label, color: nom.color, name: c.employee||'Case', kind:'Case', openFn:"openCase('"+c.id+"')" });
+    });
+  });
+  return events;
+}
+function renderCalendar() {
+  var mc = document.getElementById('mainContent');
+  var noms = getCalendarDates();
+  var events = gatherCalendarEvents();
+  var head = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div><h2 style="font-size:19px;font-weight:600;letter-spacing:-.3px;margin:0;">Calendar</h2>
+    <p style="font-size:13px;color:var(--text2);margin-top:2px;">Upcoming starts, reviews and key dates${noms.length?'':' · <a href="#" onclick="settingsSection=\'calendarDates\';currentTab=\'settings\';renderApp();return false;" style="color:var(--teal);">nominate date fields in Settings</a>'}</p></div>
+    <div style="display:flex;gap:6px;">
+      <button class="btn btn-sm ${calendarView==='agenda'?'btn-primary':''}" onclick="calendarView='agenda';renderCalendar()">Agenda</button>
+      <button class="btn btn-sm ${calendarView==='month'?'btn-primary':''}" onclick="calendarView='month';renderCalendar()">Month</button>
+    </div></div>`;
+  if (!noms.length) { mc.innerHTML = head + '<div style="text-align:center;padding:50px;color:var(--text3);"><div style="font-size:32px;margin-bottom:8px;">📅</div>No date fields nominated yet.<br><a href="#" onclick="settingsSection=\'calendarDates\';currentTab=\'settings\';renderApp();return false;" style="color:var(--teal);">Choose which dates to show →</a></div>'; return; }
+
+  if (calendarView === 'agenda') {
+    var today = new Date(); today.setHours(0,0,0,0);
+    var windowStart = new Date(today); windowStart.setDate(windowStart.getDate()-14);
+    var upcoming = events.filter(function(e){ var d=new Date(e.date+'T00:00:00'); return d>=windowStart; })
+      .sort(function(a,b){ return a.date < b.date ? -1 : 1; });
+    var rows = upcoming.map(function(e){
+      var d = new Date(e.date+'T00:00:00');
+      var days = Math.round((d-today)/86400000);
+      var when = days===0?'Today':days===1?'Tomorrow':days>1?'in '+days+' days':days===-1?'yesterday':Math.abs(days)+' days ago';
+      return '<div onclick="'+e.openFn+'" style="display:flex;align-items:center;gap:12px;padding:11px 14px;background:white;border:1px solid var(--border);border-left:3px solid '+e.color+';border-radius:var(--r-sm);margin-bottom:7px;cursor:pointer;">'
+        + '<div style="min-width:92px;"><div style="font-size:13px;font-weight:600;">'+formatDateValue(e.date)+'</div><div style="font-size:11px;color:'+(days>=0?'var(--teal)':'var(--text3)')+';font-weight:600;">'+when+'</div></div>'
+        + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+e.name+'</div><div style="font-size:11.5px;color:var(--text3);"><span style="color:'+e.color+';">●</span> '+e.label+' · '+e.kind+'</div></div>'
+        + '</div>';
+    }).join('');
+    mc.innerHTML = head + (rows || '<div style="text-align:center;padding:40px;color:var(--text3);">No upcoming dates.</div>');
+  } else {
+    // Month grid
+    var y = calendarMonth.getFullYear(), m = calendarMonth.getMonth();
+    var monthName = calendarMonth.toLocaleString('en-AU',{month:'long',year:'numeric'});
+    var first = new Date(y,m,1), startDow = (first.getDay()+6)%7; // Mon=0
+    var daysInMonth = new Date(y,m+1,0).getDate();
+    var evByDate = {};
+    events.forEach(function(e){ (evByDate[e.date]=evByDate[e.date]||[]).push(e); });
+    var cells = '';
+    for (var i=0;i<startDow;i++) cells += '<div style="min-height:78px;background:var(--bg);border-radius:6px;"></div>';
+    for (var d=1;d<=daysInMonth;d++){
+      var iso = y+'-'+('0'+(m+1)).slice(-2)+'-'+('0'+d).slice(-2);
+      var evs = evByDate[iso]||[];
+      var isToday = iso === (new Date()).toISOString().slice(0,10);
+      cells += '<div style="min-height:78px;border:1px solid var(--border);border-radius:6px;padding:4px 5px;'+(isToday?'box-shadow:inset 0 0 0 2px var(--teal);':'')+'">'
+        + '<div style="font-size:11px;color:var(--text3);font-weight:'+(isToday?'700':'400')+';">'+d+'</div>'
+        + evs.slice(0,3).map(function(e){ return '<div onclick="'+e.openFn+'" title="'+e.name+' — '+e.label+'" style="font-size:10px;padding:1px 4px;margin-top:2px;border-radius:3px;background:'+e.color+'22;color:'+e.color+';cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+e.name+'</div>'; }).join('')
+        + (evs.length>3?'<div style="font-size:9px;color:var(--text3);margin-top:1px;">+'+(evs.length-3)+' more</div>':'')
+        + '</div>';
+    }
+    var dow = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function(x){ return '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);text-align:center;padding:4px 0;">'+x+'</div>'; }).join('');
+    mc.innerHTML = head
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+      + '<button class="btn btn-sm" onclick="calendarMonth=new Date('+y+','+(m-1)+',1);renderCalendar()">‹ Prev</button>'
+      + '<div style="font-size:15px;font-weight:600;">'+monthName+'</div>'
+      + '<button class="btn btn-sm" onclick="calendarMonth=new Date('+y+','+(m+1)+',1);renderCalendar()">Next ›</button></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">'+dow+cells+'</div>';
+  }
+}
+
 function renderPeople() {
   var mc = document.getElementById('mainContent');
   mc.classList.remove('content-fade'); void mc.offsetWidth; mc.classList.add('content-fade');
@@ -10017,7 +10234,7 @@ function renderPeople() {
         var dispName = getEntityDisplayName(p, getProfileFields()) || '—';
         var pCases = cases.filter(function(c){return c.personId===p.id||(c.employee||'').toLowerCase()===dispName.toLowerCase();});
         var initials=(dispName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
-        return `<div style="background:white;border:1px solid var(--border);border-radius:var(--r-lg);padding:16px 18px;cursor:pointer;transition:box-shadow .15s;" onclick="openPersonModal('${p.id}')" onmouseover="this.style.boxShadow='var(--shadow-lg)'" onmouseout="this.style.boxShadow='none'">
+        return `<div style="background:white;border:1px solid var(--border);border-radius:var(--r-lg);padding:16px 18px;cursor:pointer;transition:box-shadow .15s;" onclick="openPersonProfile('${p.id}')" onmouseover="this.style.boxShadow='var(--shadow-lg)'" onmouseout="this.style.boxShadow='none'">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
             <div style="width:40px;height:40px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;">${initials}</div>
             <div style="min-width:0;"><div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dispName}</div>
@@ -10035,6 +10252,93 @@ function renderPeople() {
         <div style="font-size:13px;">${q?'Try a different search.':'Add your first employee profile.'}</div>
         ${!q?'<button class="btn btn-primary" style="margin-top:16px;" onclick="openPersonModal()">+ Add person</button>':''}
       </div>`}`;
+}
+
+// ── TABBED PROFILE VIEW (Option A — read view with Edit button) ──
+var _profileTab = 0;
+function openPersonProfile(id, tabIdx) {
+  _profileTab = tabIdx || 0;
+  var p = getPeople().find(function(x){ return x.id === id; });
+  if (!p) return;
+  var fields = getProfileFields();
+  var byId = {};
+  fields.forEach(function(f){ byId[f.fid || f.id] = f; });
+  var layout = getProfileLayout();
+  var dispName = getEntityDisplayName(p, fields) || 'Unnamed';
+  var initials = (dispName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
+  var position = p.pf_position || '';
+  var location = p.pf_location || '';
+
+  var readVal = function(f){
+    if (!f) return '';
+    var v = (p[f.fid] != null && p[f.fid] !== '') ? p[f.fid] : '';
+    if (!v && f.aliasIds) for (var i=0;i<f.aliasIds.length;i++){ if(p[f.aliasIds[i]]){ v=p[f.aliasIds[i]]; break; } }
+    if (!v) return '';
+    if (f.type === 'date') return formatDateValue(v);
+    if (f.type === 'schedule') return renderScheduleTable(v);
+    if (f.type === 'manager' || f.type === 'person') { var mp = getPersonById(v); return mp ? getEntityDisplayName(mp, fields) : v; }
+    return v;
+  };
+  var fieldGrid = function(fieldIds){
+    var items = (fieldIds||[]).map(function(fid){
+      var f = byId[fid]; if (!f) return '';
+      var v = readVal(f);
+      if (!v) return '';
+      var isWide = f.type === 'textarea' || f.type === 'schedule' || (v && v.length > 60);
+      return '<div style="'+(isWide?'grid-column:1/-1;':'')+'"><div style="color:var(--text3);font-size:11px;">'+f.label+'</div><div style="font-size:13px;'+(/email/i.test(f.label)?'color:var(--teal);':'')+'">'+v+'</div></div>';
+    }).filter(Boolean).join('');
+    return items ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:16px 2px;">'+items+'</div>' : '<div style="padding:16px 2px;color:var(--text3);font-size:12.5px;font-style:italic;">No details in this section.</div>';
+  };
+
+  // Build tab contents
+  var tabs = layout.tabs || [];
+  // Ensure an "Other" tab captures unassigned fields (option B)
+  var assigned = {};
+  tabs.forEach(function(t){ (t.fieldIds||[]).forEach(function(fid){ assigned[fid]=1; }); });
+  (layout.keyFields||[]).forEach(function(fid){ assigned[fid]=1; });
+  var unassigned = fields.map(function(f){ return f.fid||f.id; }).filter(function(fid){ return !assigned[fid]; });
+  var allTabs = tabs.slice();
+  if (unassigned.length) allTabs.push({ name:'Other', fieldIds: unassigned });
+  // Documents + History tabs (always present)
+  allTabs.push({ name:'Documents', _docs:true });
+  allTabs.push({ name:'History', _history:true });
+
+  var activeTab = allTabs[_profileTab] || allTabs[0];
+  var tabBody = '';
+  if (activeTab._docs) {
+    var pDocs = loadCases().filter(function(c){ return c.personId===id; });
+    tabBody = '<div style="padding:14px 2px;">'
+      + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Linked cases</div>'
+      + (pDocs.length ? pDocs.map(function(c){ var j=LIFECYCLE_JOURNEYS[c.journeyId]||{}; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;font-size:12.5px;"><span style="font-weight:600;">'+((j.label)||c.journeyId)+'</span><button class="btn btn-sm" onclick="openCase(\''+c.id+'\');document.getElementById(\'profileModal\').remove()">Open</button></div>'; }).join('') : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;">No documents or cases yet.</div>')
+      + '</div>';
+  } else if (activeTab._history) {
+    var hist = (p._history||[]).slice().sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+    tabBody = '<div style="padding:14px 2px;">'
+      + (hist.length ? hist.map(function(h){ return '<div style="display:flex;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--border);"><span style="font-size:11px;color:var(--text3);white-space:nowrap;min-width:80px;">'+(h.date||'')+'</span><span style="font-size:12.5px;"><strong>'+h.event+'</strong>'+(h.detail?' — '+h.detail:'')+'</span></div>'; }).join('') : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;">No history recorded yet.</div>')
+      + '</div>';
+  } else if (activeTab.name === 'Overview' && (_profileTab === 0)) {
+    tabBody = fieldGrid(layout.keyFields);
+  } else {
+    tabBody = fieldGrid(activeTab.fieldIds);
+  }
+
+  var tabBar = allTabs.map(function(t, i){
+    return '<div onclick="openPersonProfile(\''+id+'\','+i+')" style="padding:9px 12px;cursor:pointer;font-size:13px;white-space:nowrap;'+(i===_profileTab?'border-bottom:2px solid var(--teal);color:var(--teal);font-weight:600;':'color:var(--text3);')+'">'+t.name+'</div>';
+  }).join('');
+
+  var modal = document.getElementById('profileModal');
+  if (!modal) { modal = document.createElement('div'); modal.id='profileModal'; modal.className='overlay'; document.body.appendChild(modal); }
+  modal.innerHTML = '<div class="modal" style="width:640px;max-height:90vh;overflow-y:auto;padding:0;">'
+    + '<div style="display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid var(--border);">'
+    + '<div style="width:52px;height:52px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;flex-shrink:0;">'+initials+'</div>'
+    + '<div style="flex:1;min-width:0;"><div style="font-size:17px;font-weight:700;">'+dispName+'</div><div style="font-size:13px;color:var(--text3);">'+[position, location].filter(Boolean).join(' · ')+'</div></div>'
+    + '<button class="btn btn-sm" onclick="document.getElementById(\'profileModal\').remove();openPersonModal(\''+id+'\')">Edit</button>'
+    + '<button class="btn btn-sm" onclick="document.getElementById(\'profileModal\').remove()" style="padding:4px 9px;">✕</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;">'+tabBar+'</div>'
+    + '<div style="padding:8px 22px 18px;">'+tabBody+'</div>'
+    + '</div>';
+  modal.classList.add('open');
 }
 
 function openPersonModal(id) {
@@ -12073,6 +12377,8 @@ function renderSettings() {
     { id:'awards',          label:'Awards & Classifications' },
     { id:'candStages',      label:'Candidate Stages' },
     { id:'recruitActions',  label:'Recruitment Actions' },
+    { id:'profileLayout',   label:'Profile Layout' },
+    { id:'calendarDates',   label:'Calendar Dates' },
     { id:'schedPresets',    label:'Schedule Presets' },
     { id:'adviser',         label:'ER Adviser / Signatory' },
     { id:'appearance',      label:'Appearance' },
@@ -12597,6 +12903,61 @@ function renderSettingsSection() {
           + '<button class="btn btn-sm" onclick="deleteSchedulePreset('+i+')" style="color:var(--red);">Delete</button>'
           + '</div>';
       }).join('') : '<p style="color:var(--text3);font-style:italic;font-size:13px;">No presets yet. Build a schedule on any form and click "Save as preset".</p>'}
+    </div>`;
+    return;
+  }
+
+  if (settingsSection === 'profileLayout') {
+    var lay = getProfileLayout();
+    var pf = getProfileFields();
+    var fieldName = function(fid){ var f = pf.find(function(x){ return (x.fid||x.id)===fid; }); return f ? f.label : fid; };
+    var allFieldOpts = function(selectedIds){
+      return pf.map(function(f){ var fid=f.fid||f.id; return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;margin:0 10px 5px 0;cursor:pointer;"><input type="checkbox" data-fid="'+fid+'"'+((selectedIds||[]).indexOf(fid)!==-1?' checked':'')+' style="accent-color:var(--teal);"> '+f.label+'</label>'; }).join('');
+    };
+    el.innerHTML = `<div class="settings-section">
+      <h3>Profile Layout</h3>
+      <p>Design how the People profile <em>displays</em> (independent of the form). Choose the key fields shown on Overview, and which fields appear under each tab. Unassigned fields fall into an automatic "Other" tab, and Documents + History tabs are always shown.</p>
+      <div style="background:var(--bg);border-radius:var(--r-sm);padding:12px;margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:6px;">Overview — key fields</div>
+        <div id="plKeyFields">${allFieldOpts(lay.keyFields)}</div>
+      </div>
+      <div id="plTabs">
+        ${(lay.tabs||[]).filter(function(t){return t.name!=='Overview';}).map(function(t,ti){
+          return '<div style="background:var(--bg);border-radius:var(--r-sm);padding:12px;margin-bottom:10px;" data-tab="'+ti+'">'
+            + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><input class="pl-tab-name" value="'+(t.name||'').replace(/"/g,'&quot;')+'" style="font-weight:600;flex:1;"><button class="btn btn-sm" onclick="plRemoveTab('+ti+')" style="color:var(--red);">Remove</button></div>'
+            + '<div class="pl-tab-fields">'+allFieldOpts(t.fieldIds)+'</div></div>';
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn btn-sm" onclick="plAddTab()">+ Add tab</button>
+        <button class="btn btn-sm btn-primary" onclick="plSaveLayout()">Save layout</button>
+      </div>
+    </div>`;
+    return;
+  }
+
+  if (settingsSection === 'calendarDates') {
+    var cd = getCalendarDates();
+    var dateFields = [];
+    [getProfileFields(), getCandidateFields(), getRoleFields()].forEach(function(defs){
+      defs.forEach(function(f){ if ((f.type==='date'||f.type==='datetime'||/\bdate\b/i.test(f.label||'')) && dateFields.indexOf(f.label)<0) dateFields.push(f.label); });
+    });
+    var colors = ['#3B82F6','#16A34A','#B8791A','#8B5CF6','#DC2626','#0EA5A5'];
+    el.innerHTML = `<div class="settings-section">
+      <h3>Calendar Dates</h3>
+      <p>Choose which date fields appear on the Calendar. Each is matched by label across People, candidates, and cases, and shown in its colour.</p>
+      <div style="display:flex;flex-direction:column;gap:8px;max-width:460px;">
+        ${dateFields.map(function(lbl){
+          var existing = cd.find(function(x){ return x.label===lbl; });
+          var on = !!existing;
+          var col = existing ? existing.color : colors[dateFields.indexOf(lbl)%colors.length];
+          return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg);border-radius:var(--r-sm);">'
+            + '<label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;font-size:13px;"><input type="checkbox" class="cd-on" data-label="'+lbl.replace(/"/g,'&quot;')+'"'+(on?' checked':'')+' style="accent-color:var(--teal);"> '+lbl+'</label>'
+            + '<select class="cd-color" data-label="'+lbl.replace(/"/g,'&quot;')+'">'+colors.map(function(c){ return '<option value="'+c+'"'+(col===c?' selected':'')+' style="color:'+c+';">'+({'#3B82F6':'Blue','#16A34A':'Green','#B8791A':'Amber','#8B5CF6':'Purple','#DC2626':'Red','#0EA5A5':'Teal'})[c]+'</option>'; }).join('')+'</select>'
+            + '</div>';
+        }).join('') || '<p style="color:var(--text3);font-style:italic;font-size:13px;">No date fields found. Add date-type fields to your forms first.</p>'}
+      </div>
+      <button class="btn btn-sm btn-primary" style="margin-top:12px;" onclick="saveCalendarDatesFromUI()">Save calendar dates</button>
     </div>`;
     return;
   }
@@ -13687,27 +14048,43 @@ function promoteCandidateToPeople(roleId, candidateId) {
   var candidates = getCandidates(roleId);
   var c = candidates.find(function(x){ return x.id === candidateId; });
   if(!c) return;
-  if(!confirm('Add ' + (c.cand_name||'this candidate') + ' to People as an employee profile?')) return;
+  var cName = getEntityDisplayName(c, getCandidateFields()) || 'this candidate';
+  if(!confirm('Create a People profile for ' + cName + '?\n\nThe profile form will open pre-filled with their candidate details for you to complete.')) return;
 
-  var person = {
-    id: 'p' + Date.now(), updated: todayStr(),
-    sourceCandidate: candidateId,    // retain chain for field resolution
-    pf_fullname:  c.cand_name    || '',
-    pf_preferred: c.cand_preferred || '',
-    pf_pronouns:  c.cand_pronouns || '',
-    pf_email:     c.cand_email   || '',
-    pf_mobile:    c.cand_phone   || '',
-    pf_notes:     c.cand_notes   || '',
-    pf_position:  c.cand_role    || '',
-    pf_location:  c.cand_location || '',
-    pf_manager:   c.cand_manager  || '',
-  };
+  // Map candidate fields → profile fields by meaning
+  var candByLabel = {};
+  getCandidateFields().forEach(function(f){
+    var v = (c[f.id] != null ? c[f.id] : '');
+    if (v) candByLabel[(f.label||'').toUpperCase().trim()] = v;
+  });
+  var person = { id: 'p' + Date.now(), updated: todayStr(), sourceCandidate: candidateId };
+  getProfileFields().forEach(function(pf){
+    var lbl = (pf.label||'').toUpperCase().trim();
+    var v = candByLabel[lbl] || '';
+    if (!v) {
+      if (/PREFERRED/.test(lbl)) v = candByLabel['PREFERRED NAME'] || '';
+      else if (/FIRST|GIVEN/.test(lbl)) v = candByLabel['FIRST NAME'] || '';
+      else if (/LAST|SURNAME|FAMILY/.test(lbl)) v = candByLabel['LAST NAME'] || candByLabel['SURNAME'] || '';
+      else if (/FULL NAME/.test(lbl)) v = candByLabel['FULL NAME'] || c.cand_name || cName;
+      else if (/EMAIL/.test(lbl)) v = candByLabel['EMAIL'] || c.cand_email || '';
+      else if (/MOBILE|PHONE/.test(lbl)) v = candByLabel['PHONE'] || candByLabel['MOBILE'] || c.cand_phone || '';
+      else if (/POSITION|ROLE|TITLE/.test(lbl)) v = candByLabel['ROLE APPLIED FOR'] || candByLabel['POSITION'] || '';
+      else if (/LOCATION/.test(lbl)) v = candByLabel['LOCATION'] || '';
+      else if (/MANAGER/.test(lbl)) v = candByLabel['REPORTING MANAGER'] || candByLabel['MANAGER'] || '';
+      else if (/PRONOUN/.test(lbl)) v = candByLabel['PRONOUNS'] || '';
+      else if (/NOTES/.test(lbl)) v = candByLabel['NOTES'] || '';
+    }
+    if (v) person[pf.id] = v;
+  });
   var people = getPeople();
   people.push(person);
   savePeople(people);
-  document.getElementById('candidateModal').classList.remove('open');
-  document.getElementById('pipelineDetailModal').classList.remove('open');
-  toast((c.cand_name||'Candidate') + ' added to People');
+  addHistory(person.id, 'Profile created', 'Converted from candidate');
+  var cm = document.getElementById('candidateModal'); if (cm) cm.classList.remove('open');
+  var pm = document.getElementById('pipelineDetailModal'); if (pm) pm.classList.remove('open');
+  // Open the People form pre-filled so she can build out the profile
+  if (typeof openPersonModal === 'function') openPersonModal(person.id);
+  toast('Profile created — complete their details');
 }
 
 // ── RECRUITMENT PIPELINE ──────────────────────────────────────────────────
@@ -14069,15 +14446,18 @@ function renderScheduleEditor(inputId, sched, awardName) {
     html += '<div style="margin-bottom:'+(multi?'10px':'0')+';">';
     if (multi) html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><span style="font-size:11px;font-weight:700;color:var(--text2);">Week '+(wi+1)+'</span><button type="button" onclick="schedRemoveWeek(\''+inputId+'\','+wi+')" style="font-size:10px;color:var(--red);background:none;border:none;cursor:pointer;">Remove</button></div>';
     html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px;">';
+    html += '<tr style="color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.04em;"><td style="padding:0 6px 3px 0;">Day</td><td style="padding:0 4px 3px;">Start</td><td style="padding:0 4px 3px;">Finish</td><td style="padding:0 4px 3px;" title="Unpaid break (minutes)">Break (m)</td><td style="padding:0 0 3px 4px;">Hours</td></tr>';
     SCHEDULE_DAYS.forEach(function(d){
       var day = (week.days && week.days[d]) || null;
       var active = !!day;
       var hrs = day ? (day.hours != null ? day.hours : scheduleDayHours(day)) : '';
+      var brk = day && day.breakMins != null ? day.breakMins : '';
       html += '<tr style="'+(active?'':'opacity:.5;')+'">'
         + '<td style="padding:2px 6px 2px 0;width:44px;"><label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" '+(active?'checked':'')+' onchange="schedToggleDay(\''+inputId+'\','+wi+',\''+d+'\',this.checked)" style="accent-color:var(--teal);"> '+d+'</label></td>'
         + '<td style="padding:2px 4px;"><input type="time" value="'+(day?day.start||'':'')+'" '+(active?'':'disabled')+' onchange="schedSetTime(\''+inputId+'\','+wi+',\''+d+'\',\'start\',this.value)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
         + '<td style="padding:2px 4px;"><input type="time" value="'+(day?day.finish||'':'')+'" '+(active?'':'disabled')+' onchange="schedSetTime(\''+inputId+'\','+wi+',\''+d+'\',\'finish\',this.value)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
-        + '<td style="padding:2px 0 2px 4px;width:56px;"><input type="number" step="0.25" value="'+hrs+'" '+(active?'':'disabled')+' onchange="schedSetHours(\''+inputId+'\','+wi+',\''+d+'\',this.value)" title="Hours (auto, editable)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
+        + '<td style="padding:2px 4px;width:56px;"><input type="number" step="5" min="0" value="'+brk+'" '+(active?'':'disabled')+' placeholder="0" onchange="schedSetBreak(\''+inputId+'\','+wi+',\''+d+'\',this.value)" title="Unpaid break in minutes" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;"></td>'
+        + '<td style="padding:2px 0 2px 4px;width:56px;"><input type="number" step="0.25" value="'+hrs+'" '+(active?'':'disabled')+' onchange="schedSetHours(\''+inputId+'\','+wi+',\''+d+'\',this.value)" title="Hours (auto, editable)" style="font-size:11px;padding:2px 4px;width:100%;box-sizing:border-box;background:#F7FAFA;"></td>'
         + '</tr>';
     });
     html += '</table></div>';
@@ -14118,6 +14498,7 @@ function schedSetPattern(id, v){ var s=_schedGet(id); s.pattern=v; _schedSet(id,
 function schedToggleDay(id, wi, d, on){ var s=_schedGet(id); if(!s.weeks[wi].days)s.weeks[wi].days={}; if(on){s.weeks[wi].days[d]={start:'09:00',finish:'17:00',hours:8};}else{delete s.weeks[wi].days[d];} s.totalOverride=null; _schedSet(id,s); }
 function schedSetTime(id, wi, d, field, v){ var s=_schedGet(id); if(s.weeks[wi].days[d]){s.weeks[wi].days[d][field]=v; s.weeks[wi].days[d].hours=scheduleDayHours(s.weeks[wi].days[d]);} s.totalOverride=null; _schedSet(id,s); }
 function schedSetHours(id, wi, d, v){ var s=_schedGet(id); if(s.weeks[wi].days[d])s.weeks[wi].days[d].hours=+v; s.totalOverride=null; _schedSet(id,s); }
+function schedSetBreak(id, wi, d, v){ var s=_schedGet(id); if(s.weeks[wi].days[d]){s.weeks[wi].days[d].breakMins=(v===''?0:+v); s.weeks[wi].days[d].hours=scheduleDayHours(s.weeks[wi].days[d]);} s.totalOverride=null; _schedSet(id,s); }
 function schedSetNotes(id, v){ var el=document.getElementById(id); if(el){var s=parseSchedule(el.value); s.notes=v; el.value=JSON.stringify(s);} }
 function schedSetTotalOverride(id, v){ var s=_schedGet(id); s.totalOverride=(v===''?null:+v); var el=document.getElementById(id); if(el)el.value=JSON.stringify(s); }
 function schedAddWeek(id){ var s=_schedGet(id); s.weeks.push({days:{}}); _schedSet(id,s); }
@@ -14129,9 +14510,6 @@ function deleteSchedulePreset(idx){ var presets=getSchedulePresets(); presets.sp
 
 function getEntityDisplayName(entity, fieldDefs) {
   if (!entity) return '';
-  // Fast paths — common explicit fields
-  if (entity.cand_name) return entity.cand_name;
-  if (entity.pf_fullname) return entity.pf_fullname;
   var first = '', last = '', full = '', preferred = '';
   var readVal = function(f) {
     if (entity[f.id] != null && entity[f.id] !== '') return entity[f.id];
@@ -14148,9 +14526,13 @@ function getEntityDisplayName(entity, fieldDefs) {
     else if (/preferred/.test(lbl)) preferred = preferred || v;
     else if (/first|given/.test(lbl)) first = first || v;
   });
+  // Preferred: {{Preferred Name}} {{Surname}} when both/either component exists
+  var composed = [(preferred||first), last].filter(Boolean).join(' ').trim();
+  if (composed) return composed;
+  // Explicit single full-name fields
   if (full) return full;
-  var name = [(preferred||first), last].filter(Boolean).join(' ').trim();
-  if (name) return name;
+  if (entity.cand_name) return entity.cand_name;
+  if (entity.pf_fullname) return entity.pf_fullname;
   // ── Fallback 1: scan common field ids directly (covers old/custom records) ──
   var idCandidates = ['cand_name','cand_fullname','pf_fullname','name','fullName','full_name',
     'cand_preferred','pf_preferred','preferred','cand_first','pf_first','first_name','firstName',
