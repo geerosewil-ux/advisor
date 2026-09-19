@@ -10120,6 +10120,7 @@ var editingPersonId = null;
 
 // ── CALENDAR ──────────────────────────────────────────────────────────────
 var calendarView = 'agenda'; // 'month' | 'agenda'
+var _calShowLapsed = false;
 var calendarMonth = new Date();
 // Gather calendar events from nominated date fields across People, candidates, cases
 function gatherCalendarEvents() {
@@ -10166,10 +10167,11 @@ function renderCalendar() {
 
   if (calendarView === 'agenda') {
     var today = new Date(); today.setHours(0,0,0,0);
-    var windowStart = new Date(today); windowStart.setDate(windowStart.getDate()-14);
-    var upcoming = events.filter(function(e){ var d=new Date(e.date+'T00:00:00'); return d>=windowStart; })
-      .sort(function(a,b){ return a.date < b.date ? -1 : 1; });
-    var rows = upcoming.map(function(e){
+    var sorted = events.slice().sort(function(a,b){ return a.date < b.date ? -1 : 1; });
+    var upcoming = [], lapsed = [];
+    sorted.forEach(function(e){ var d=new Date(e.date+'T00:00:00'); (d>=today?upcoming:lapsed).push(e); });
+    lapsed.reverse(); // most recent lapsed first
+    var rowHtml = function(e){
       var d = new Date(e.date+'T00:00:00');
       var days = Math.round((d-today)/86400000);
       var when = days===0?'Today':days===1?'Tomorrow':days>1?'in '+days+' days':days===-1?'yesterday':Math.abs(days)+' days ago';
@@ -10177,8 +10179,14 @@ function renderCalendar() {
         + '<div style="min-width:92px;"><div style="font-size:13px;font-weight:600;">'+formatDateValue(e.date)+'</div><div style="font-size:11px;color:'+(days>=0?'var(--teal)':'var(--text3)')+';font-weight:600;">'+when+'</div></div>'
         + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">'+e.name+'</div><div style="font-size:11.5px;color:var(--text3);"><span style="color:'+e.color+';">●</span> '+e.label+' · '+e.kind+'</div></div>'
         + '</div>';
-    }).join('');
-    mc.innerHTML = head + (rows || '<div style="text-align:center;padding:40px;color:var(--text3);">No upcoming dates.</div>');
+    };
+    var body = upcoming.length ? upcoming.map(rowHtml).join('') : '<div style="text-align:center;padding:30px;color:var(--text3);">No upcoming dates.</div>';
+    if (lapsed.length) {
+      body += '<div style="margin-top:14px;"><button onclick="_calShowLapsed=!_calShowLapsed;renderCalendar()" style="background:none;border:none;color:var(--text3);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;padding:6px 0;font-family:inherit;">'
+        + '<span style="transform:rotate('+(_calShowLapsed?'90':'0')+'deg);display:inline-block;transition:.15s;">▸</span> Lapsed ('+lapsed.length+')</button>'
+        + (_calShowLapsed ? '<div style="opacity:.65;">'+lapsed.map(rowHtml).join('')+'</div>' : '') + '</div>';
+    }
+    mc.innerHTML = head + body;
   } else {
     // Month grid
     var y = calendarMonth.getFullYear(), m = calendarMonth.getMonth();
@@ -10209,48 +10217,83 @@ function renderCalendar() {
   }
 }
 
+// Determine a person's status (for colour + filter). Reads a Status field if present,
+// else infers from employment type / leave fields.
+function getPersonStatus(p) {
+  var s = (p.pf_status || p.status || '').toString().toLowerCase();
+  if (/probation/.test(s)) return 'Probation';
+  if (/leav|terminat|exit|ceased|inactive/.test(s)) return 'Inactive';
+  if (/active|current|employed/.test(s)) return 'Active';
+  // infer
+  for (var k in p) { if (/status/i.test(k) && typeof p[k]==='string') { var v=p[k].toLowerCase(); if(/probation/.test(v))return'Probation'; if(/leav|terminat|inactive|ceased/.test(v))return'Inactive'; if(/active|current/.test(v))return'Active'; } }
+  return 'Active';
+}
+var STATUS_STYLE = {
+  'Active':    { avatar:'var(--teal)',   pillBg:'var(--teal-lt)',  pillFg:'var(--teal)' },
+  'Probation': { avatar:'#B8791A',       pillBg:'#FEF3E2',         pillFg:'#B8791A' },
+  'Inactive':  { avatar:'#6B7280',       pillBg:'#F1F1F0',         pillFg:'#6B7280' }
+};
+var peopleStatusFilter = 'All';
 function renderPeople() {
   var mc = document.getElementById('mainContent');
   mc.classList.remove('content-fade'); void mc.offsetWidth; mc.classList.add('content-fade');
   var people = getPeople();
+  var pfDefs = getProfileFields();
   var q = peopleSearchQ.toLowerCase();
-  var filtered = q ? people.filter(function(p){
-    var dn = getEntityDisplayName(p, getProfileFields()).toLowerCase();
-    return dn.includes(q)||(p.pf_fullname||'').toLowerCase().includes(q)||(p.pf_position||'').toLowerCase().includes(q)||(p.pf_department||'').toLowerCase().includes(q);
-  }) : people;
-  var cases = loadCases();
+  // Counts by status
+  var counts = { All: people.length, Active:0, Probation:0, Inactive:0 };
+  people.forEach(function(p){ counts[getPersonStatus(p)] = (counts[getPersonStatus(p)]||0)+1; });
+  var filtered = people.filter(function(p){
+    if (peopleStatusFilter !== 'All' && getPersonStatus(p) !== peopleStatusFilter) return false;
+    if (!q) return true;
+    var dn = getEntityDisplayName(p, pfDefs).toLowerCase();
+    return dn.includes(q)||(p.pf_position||'').toLowerCase().includes(q)||(p.pf_location||'').toLowerCase().includes(q)||(p.pf_department||'').toLowerCase().includes(q);
+  });
+  // Sort by name
+  filtered.sort(function(a,b){ return getEntityDisplayName(a,pfDefs).localeCompare(getEntityDisplayName(b,pfDefs)); });
 
-  mc.innerHTML = `<div class="section-head" style="margin-bottom:16px;">
-      <div><h2>People</h2><p>Employee profiles, history and linked cases.</p></div>
+  var chip = function(label, key){
+    var on = peopleStatusFilter === key;
+    return '<span onclick="peopleStatusFilter=\''+key+'\';renderPeople()" style="font-size:12px;padding:4px 12px;border-radius:var(--r-sm);cursor:pointer;'+(on?'background:var(--teal-lt);color:var(--teal);font-weight:600;':'border:1px solid var(--border);color:var(--text3);')+'">'+label+' '+(counts[key]||0)+'</span>';
+  };
+
+  var startField = pfDefs.find(function(f){ return /start date|commencement/i.test(f.label); });
+
+  mc.innerHTML = `<div class="section-head" style="margin-bottom:14px;">
+      <div><h2>People</h2><p>${people.length} employee${people.length!==1?'s':''}</p></div>
       <div style="display:flex;gap:6px;">
         <div style="position:relative;">
           <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);width:12px;height:12px;stroke:var(--text3);fill:none;stroke-width:2;" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input placeholder="Search people…" value="${peopleSearchQ.replace(/"/g,'&quot;')}" style="padding:6px 10px 6px 28px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;font-size:13px;width:200px;" oninput="peopleSearchQ=this.value;renderPeople()">
+          <input placeholder="Search people…" value="${peopleSearchQ.replace(/"/g,'&quot;')}" style="padding:6px 10px 6px 28px;border:1px solid var(--border);border-radius:var(--r-sm);font-family:inherit;font-size:13px;width:220px;" oninput="peopleSearchQ=this.value;renderPeople()">
         </div>
         <button class="btn btn-primary" onclick="openPersonModal()">+ Add person</button>
       </div></div>
-    ${filtered.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">
-      ${filtered.map(function(p){
-        var dispName = getEntityDisplayName(p, getProfileFields()) || '—';
-        var pCases = cases.filter(function(c){return c.personId===p.id||(c.employee||'').toLowerCase()===dispName.toLowerCase();});
+    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
+      ${chip('All','All')}${chip('Active','Active')}${chip('Probation','Probation')}${chip('Inactive','Inactive')}
+    </div>
+    ${filtered.length ? `<div style="border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:white;">
+      ${filtered.map(function(p, idx){
+        var dispName = getEntityDisplayName(p, pfDefs) || '—';
         var initials=(dispName||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
-        return `<div style="background:white;border:1px solid var(--border);border-radius:var(--r-lg);padding:16px 18px;cursor:pointer;transition:box-shadow .15s;" onclick="openPersonProfile('${p.id}')" onmouseover="this.style.boxShadow='var(--shadow-lg)'" onmouseout="this.style.boxShadow='none'">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-            <div style="width:40px;height:40px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;">${initials}</div>
-            <div style="min-width:0;"><div style="font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dispName}</div>
-            <div style="font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.pf_position||''}${p.pf_department?' · '+p.pf_department:''}</div></div>
+        var st = getPersonStatus(p);
+        var sty = STATUS_STYLE[st] || STATUS_STYLE['Active'];
+        var startVal = startField ? (p[startField.fid]||p[startField.id]||'') : (p.pf_startdate||'');
+        var startDisp = startVal ? formatDateValue(startVal) : '';
+        return `<div onclick="openPersonProfile('${p.id}')" style="display:flex;align-items:center;gap:12px;padding:11px 14px;${idx>0?'border-top:0.5px solid var(--border);':''}cursor:pointer;transition:background .1s;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='white'">
+          <div style="width:40px;height:40px;border-radius:50%;background:${sty.avatar};color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">${initials}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dispName}</div>
+            <div style="font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${[p.pf_position, p.pf_location||p.pf_department].filter(Boolean).join(' · ')}</div>
           </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11.5px;">
-            ${p.pf_emptype?`<span style="background:var(--bg);padding:1px 7px;border-radius:10px;border:1px solid var(--border);color:var(--text3);">${p.pf_emptype}</span>`:''}
-            ${p.pf_location?`<span style="background:var(--bg);padding:1px 7px;border-radius:10px;border:1px solid var(--border);color:var(--text3);">${p.pf_location}</span>`:''}
-            ${pCases.length?`<span style="background:var(--teal-lt);color:var(--teal);padding:1px 7px;border-radius:10px;border:1px solid var(--teal-mid);">${pCases.length} case${pCases.length!==1?'s':''}</span>`:''}
-          </div></div>`;
+          <span style="font-size:11px;padding:3px 9px;border-radius:var(--r-sm);background:${sty.pillBg};color:${sty.pillFg};flex-shrink:0;">${st}</span>
+          ${startDisp?`<span style="font-size:12px;color:var(--text3);white-space:nowrap;flex-shrink:0;min-width:80px;text-align:right;">${startDisp}</span>`:''}
+        </div>`;
       }).join('')}</div>`
     : `<div style="text-align:center;padding:60px 20px;color:var(--text3);">
         <svg viewBox="0 0 24 24" style="width:40px;height:40px;stroke:var(--border);fill:none;stroke-width:1.5;margin:0 auto 16px;display:block;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <div style="font-size:15px;font-weight:600;color:var(--text2);margin-bottom:6px;">${q?'No results':'No people yet'}</div>
-        <div style="font-size:13px;">${q?'Try a different search.':'Add your first employee profile.'}</div>
-        ${!q?'<button class="btn btn-primary" style="margin-top:16px;" onclick="openPersonModal()">+ Add person</button>':''}
+        <div style="font-size:15px;font-weight:600;color:var(--text2);margin-bottom:6px;">${q||peopleStatusFilter!=='All'?'No results':'No people yet'}</div>
+        <div style="font-size:13px;">${q||peopleStatusFilter!=='All'?'Try a different search or filter.':'Add your first employee profile.'}</div>
+        ${!q&&peopleStatusFilter==='All'?'<button class="btn btn-primary" style="margin-top:16px;" onclick="openPersonModal()">+ Add person</button>':''}
       </div>`}`;
 }
 
@@ -10287,7 +10330,7 @@ function openPersonProfile(id, tabIdx) {
       var isWide = f.type === 'textarea' || f.type === 'schedule' || (v && v.length > 60);
       return '<div style="'+(isWide?'grid-column:1/-1;':'')+'"><div style="color:var(--text3);font-size:11px;">'+f.label+'</div><div style="font-size:13px;'+(/email/i.test(f.label)?'color:var(--teal);':'')+'">'+v+'</div></div>';
     }).filter(Boolean).join('');
-    return items ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;padding:16px 2px;">'+items+'</div>' : '<div style="padding:16px 2px;color:var(--text3);font-size:12.5px;font-style:italic;">No details in this section.</div>';
+    return items ? '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px 32px;padding:8px 2px;">'+items+'</div>' : '<div style="padding:16px 2px;color:var(--text3);font-size:12.5px;font-style:italic;">No details in this section.</div>';
   };
 
   // Build tab contents
@@ -10309,7 +10352,7 @@ function openPersonProfile(id, tabIdx) {
     var pDocs = loadCases().filter(function(c){ return c.personId===id; });
     tabBody = '<div style="padding:14px 2px;">'
       + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Linked cases</div>'
-      + (pDocs.length ? pDocs.map(function(c){ var j=LIFECYCLE_JOURNEYS[c.journeyId]||{}; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;font-size:12.5px;"><span style="font-weight:600;">'+((j.label)||c.journeyId)+'</span><button class="btn btn-sm" onclick="openCase(\''+c.id+'\');document.getElementById(\'profileModal\').remove()">Open</button></div>'; }).join('') : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;">No documents or cases yet.</div>')
+      + (pDocs.length ? pDocs.map(function(c){ var j=LIFECYCLE_JOURNEYS[c.journeyId]||{}; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;font-size:12.5px;"><span style="font-weight:600;">'+((j.label)||c.journeyId)+'</span><button class="btn btn-sm" onclick="openCase(\''+c.id+'\')">Open</button></div>'; }).join('') : '<div style="font-size:12.5px;color:var(--text3);font-style:italic;">No documents or cases yet.</div>')
       + '</div>';
   } else if (activeTab._history) {
     var hist = (p._history||[]).slice().sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
@@ -10323,22 +10366,34 @@ function openPersonProfile(id, tabIdx) {
   }
 
   var tabBar = allTabs.map(function(t, i){
-    return '<div onclick="openPersonProfile(\''+id+'\','+i+')" style="padding:9px 12px;cursor:pointer;font-size:13px;white-space:nowrap;'+(i===_profileTab?'border-bottom:2px solid var(--teal);color:var(--teal);font-weight:600;':'color:var(--text3);')+'">'+t.name+'</div>';
+    return '<div onclick="openPersonProfile(\''+id+'\','+i+')" style="padding:12px 14px;cursor:pointer;font-size:14px;white-space:nowrap;'+(i===_profileTab?'border-bottom:2px solid var(--teal);color:var(--teal);font-weight:600;':'color:var(--text3);')+'">'+t.name+'</div>';
   }).join('');
 
-  var modal = document.getElementById('profileModal');
-  if (!modal) { modal = document.createElement('div'); modal.id='profileModal'; modal.className='overlay'; document.body.appendChild(modal); }
-  modal.innerHTML = '<div class="modal" style="width:640px;max-height:90vh;overflow-y:auto;padding:0;">'
-    + '<div style="display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid var(--border);">'
-    + '<div style="width:52px;height:52px;border-radius:50%;background:var(--teal);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;flex-shrink:0;">'+initials+'</div>'
-    + '<div style="flex:1;min-width:0;"><div style="font-size:17px;font-weight:700;">'+dispName+'</div><div style="font-size:13px;color:var(--text3);">'+[position, location].filter(Boolean).join(' · ')+'</div></div>'
-    + '<button class="btn btn-sm" onclick="document.getElementById(\'profileModal\').remove();openPersonModal(\''+id+'\')">Edit</button>'
-    + '<button class="btn btn-sm" onclick="document.getElementById(\'profileModal\').remove()" style="padding:4px 9px;">✕</button>'
+  var st = getPersonStatus(p);
+  var sty = STATUS_STYLE[st] || STATUS_STYLE['Active'];
+
+  // Close any open modal, render full-page in main content
+  var pm = document.getElementById('profileModal'); if (pm) pm.remove();
+  currentTab = 'people';
+  document.getElementById('sidebar').style.display = 'none';
+  document.getElementById('emptyState').style.display = 'none';
+  var mc = document.getElementById('mainContent');
+  mc.style.display = 'block';
+  mc.innerHTML = ''
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
+    + '<button class="btn btn-sm" onclick="renderPeople()">← People</button>'
     + '</div>'
-    + '<div style="display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--border);overflow-x:auto;">'+tabBar+'</div>'
-    + '<div style="padding:8px 22px 18px;">'+tabBody+'</div>'
+    + '<div style="border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:white;">'
+    + '<div style="display:flex;align-items:center;gap:16px;padding:22px 26px;background:var(--bg);border-bottom:1px solid var(--border);">'
+    + '<div style="width:64px;height:64px;border-radius:50%;background:'+sty.avatar+';color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;flex-shrink:0;">'+initials+'</div>'
+    + '<div style="flex:1;min-width:0;"><div style="font-size:22px;font-weight:700;">'+dispName+'</div><div style="font-size:14px;color:var(--text3);">'+[position, location].filter(Boolean).join(' · ')+'</div></div>'
+    + '<span style="font-size:12px;padding:4px 12px;border-radius:var(--r-sm);background:'+sty.pillBg+';color:'+sty.pillFg+';">'+st+'</span>'
+    + '<button class="btn btn-sm" onclick="openPersonModal(\''+id+'\')">✎ Edit</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:4px;padding:0 22px;border-bottom:1px solid var(--border);overflow-x:auto;">'+tabBar+'</div>'
+    + '<div style="padding:22px 26px;">'+tabBody+'</div>'
     + '</div>';
-  modal.classList.add('open');
+  window.scrollTo(0,0);
 }
 
 function openPersonModal(id) {
@@ -10476,7 +10531,9 @@ function savePerson() {
   if(idx>=0) people[idx]=person; else people.push(person);
   savePeople(people);
   document.getElementById('personModal').classList.remove('open');
-  renderPeople(); toast('Profile saved');
+  var wasEditing = editingPersonId;
+  if (wasEditing) { openPersonProfile(wasEditing); } else { renderPeople(); }
+  toast('Profile saved');
 }
 function deletePerson(id) {
   if(!confirm('Delete this profile? Linked cases will remain.')) return;
