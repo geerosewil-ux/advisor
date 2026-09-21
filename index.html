@@ -10041,7 +10041,21 @@ function generateInductionICS() {
     if (!window.PizZip) { alert('Calendar library not loaded — try again.'); return; }
     var saved = fieldValues;
     var zip = new window.PizZip();
-    var esc = function(t){ return String(t||'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n'); };
+    // Replace non-ASCII (em-dash, smart quotes) with ASCII equivalents — strict parsers reject them
+    var asciiClean = function(t){
+      return String(t||'')
+        .replace(/[—–]/g,'-').replace(/['']/g,"'").replace(/[""]/g,'"').replace(/…/g,'...')
+        .replace(/[^\x00-\x7F]/g,''); // drop any remaining non-ASCII
+    };
+    var esc = function(t){ return asciiClean(t).replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n'); };
+    // Fold lines to 74 chars per iCal spec (a leading space continues the previous line)
+    var fold = function(line){
+      if (line.length <= 74) return line;
+      var out = line.slice(0,74), rest = line.slice(74);
+      while (rest.length > 73) { out += '\r\n ' + rest.slice(0,73); rest = rest.slice(73); }
+      out += '\r\n ' + rest;
+      return out;
+    };
     sessions.forEach(function(s, i){
       var ctx = _indSessionValues(s, newStarter, pfDefs);
       var stakeName = ctx.stake ? getEntityDisplayName(ctx.stake, pfDefs) : (s.type||'Induction');
@@ -10057,16 +10071,25 @@ function generateInductionICS() {
       var attendees = [];
       if (newStarter.pf_email) attendees.push(newStarter.pf_email);
       if (ctx.stake && ctx.stake.pf_email) attendees.push(ctx.stake.pf_email);
-      var dtLine = s.date ? ('DTSTART;VALUE=DATE:'+s.date.replace(/-/g,'')+'\r\nDTEND;VALUE=DATE:'+s.date.replace(/-/g,'')+'\r\n') : '';
-      var ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ER Adviser//Induction//EN\r\nMETHOD:PUBLISH\r\nBEGIN:VEVENT\r\n'
-        + 'UID:ind-'+Date.now()+'-'+i+'@eradviser\r\n'
-        + dtLine
-        + 'SUMMARY:'+esc(summary)+'\r\n'
-        + (s.location ? 'LOCATION:'+esc(s.location)+'\r\n' : '')
-        + 'DESCRIPTION:'+esc(descBody)+'\r\n'
-        + attendees.map(function(a){ return 'ATTENDEE;RSVP=TRUE:mailto:'+a+'\r\n'; }).join('')
-        + 'END:VEVENT\r\nEND:VCALENDAR\r\n';
-      var fname = (s.type+' - '+stakeName).replace(/[^\w \-]/g,'').trim() + '.ics';
+      var stamp = new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
+      var startDate = s.date || new Date().toISOString().slice(0,10);
+      var startYmd = startDate.replace(/-/g,'');
+      var endObj = new Date(startDate+'T00:00:00'); endObj.setDate(endObj.getDate()+1);
+      var endYmd = endObj.getFullYear()+('0'+(endObj.getMonth()+1)).slice(-2)+('0'+endObj.getDate()).slice(-2);
+      var lines = [
+        'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//ER Adviser//Induction//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','BEGIN:VEVENT',
+        'UID:ind-'+Date.now()+'-'+i+'@eradviser',
+        'DTSTAMP:'+stamp,
+        'DTSTART;VALUE=DATE:'+startYmd,
+        'DTEND;VALUE=DATE:'+endYmd,
+        fold('SUMMARY:'+esc(summary))
+      ];
+      if (s.location) lines.push(fold('LOCATION:'+esc(s.location)));
+      lines.push(fold('DESCRIPTION:'+esc(descBody)));
+      attendees.forEach(function(a){ lines.push(fold('ATTENDEE;RSVP=TRUE:mailto:'+a)); });
+      lines.push('STATUS:CONFIRMED','END:VEVENT','END:VCALENDAR');
+      var ics = lines.join('\r\n') + '\r\n';
+      var fname = asciiClean(s.type+' - '+stakeName).replace(/[^\w \-]/g,'').trim() + '.ics';
       zip.file(fname, ics);
     });
     fieldValues = saved;
