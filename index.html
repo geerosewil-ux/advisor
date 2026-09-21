@@ -3060,7 +3060,13 @@ function outlookBody(item, forSend) {
   // Apply text case modifier: {{FIELD|lower}}, {{FIELD|upper}}, {{FIELD|title}}, {{FIELD|sentence}}
   var applyModifier = function(val, mod) {
     if (!mod || !val) return val;
-    switch(mod.trim().toLowerCase()) {
+    var m = mod.trim();
+    // Date format tokens (contains y/m/d/h format chars) — Microsoft-style
+    if (/[yYmMdDhHns]/.test(m) && /(yy|mm|dd|dddd|mmmm|hh|nn|HH)/.test(m)) {
+      var dv = toISODate(val) || val;
+      return formatDateToken(val, m);
+    }
+    switch(m.toLowerCase()) {
       case 'lower':    return val.toLowerCase();
       case 'upper':    return val.toUpperCase();
       case 'title':    return val.replace(/\b\w/g, c => c.toUpperCase());
@@ -3071,10 +3077,13 @@ function outlookBody(item, forSend) {
   }
 
   var resolveKey = function(raw) {
-    // Split on | to get field name and optional modifier
-    const pipe = raw.indexOf('|');
-    if (pipe === -1) return { key: raw.trim(), mod: null };
-    return { key: raw.slice(0, pipe).trim(), mod: raw.slice(pipe + 1).trim() };
+    // Split on : or | to get field name and optional modifier/format
+    var sep = -1, ch = '';
+    var colon = raw.indexOf(':'), pipe = raw.indexOf('|');
+    if (colon !== -1 && (pipe === -1 || colon < pipe)) { sep = colon; }
+    else if (pipe !== -1) { sep = pipe; }
+    if (sep === -1) return { key: raw.trim(), mod: null };
+    return { key: raw.slice(0, sep).trim(), mod: raw.slice(sep + 1).trim() };
   }
 
   var getPronouns = function() {
@@ -3089,7 +3098,8 @@ function outlookBody(item, forSend) {
     var direct = fieldValues[ktClean.toUpperCase()] ?? fieldValues[ktClean] ?? fieldValues[ktClean.toLowerCase()];
     if (direct !== undefined && direct !== null && direct !== '') {
       var sv = Array.isArray(direct) ? direct.join(', ') : String(direct);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(sv.trim())) sv = formatDateValue(sv.trim());
+      var isDateTokenMod = mod && /(yy|mm|dd|dddd|mmmm|hh|nn|HH)/.test(mod);
+      if (/^\d{4}-\d{2}-\d{2}/.test(sv.trim()) && !isDateTokenMod) sv = formatDateValue(sv.trim());
       return applyModifier(sv, mod);
     }
     // Pronoun tags
@@ -5780,6 +5790,40 @@ function toISODate(val) {
     return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
   }
   return '';
+}
+
+// Format a date using Microsoft-style tokens: yyyy yy mmmm mmm mm m dddd ddd dd d HH hh nn ss am/pm
+function formatDateToken(dateVal, pattern) {
+  var iso = toISODate(dateVal);
+  var timePart = '';
+  if (!iso) {
+    // maybe a datetime "YYYY-MM-DD HH:MM"
+    var m = String(dateVal).match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/);
+    if (m) { iso = m[1]; timePart = m[2]+':'+m[3]; }
+  } else {
+    var mt = String(dateVal).match(/[ T](\d{2}):(\d{2})/);
+    if (mt) timePart = mt[1]+':'+mt[2];
+  }
+  if (!iso) return dateVal;
+  var d = new Date(iso + 'T' + (timePart||'00:00') + ':00');
+  if (isNaN(d)) return dateVal;
+  var ML = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var DL = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var pad = function(n){ return ('0'+n).slice(-2); };
+  var H = d.getHours(), h12 = H%12; if(h12===0)h12=12;
+  var tokens = {
+    'yyyy': d.getFullYear(), 'yy': String(d.getFullYear()).slice(-2),
+    'mmmm': ML[d.getMonth()], 'mmm': ML[d.getMonth()].slice(0,3), 'mm': pad(d.getMonth()+1), 'm': (d.getMonth()+1),
+    'dddd': DL[d.getDay()], 'ddd': DL[d.getDay()].slice(0,3), 'dd': pad(d.getDate()), 'd': d.getDate(),
+    'HH': pad(H), 'H': H, 'hh': pad(h12), 'h': h12, 'nn': pad(d.getMinutes()), 'n': d.getMinutes(),
+    'ss': pad(d.getSeconds()), 'ampm': H<12?'am':'pm', 'AMPM': H<12?'AM':'PM'
+  };
+  // Replace longest tokens first
+  var order = ['yyyy','dddd','mmmm','ampm','AMPM','ddd','mmm','yy','mm','dd','HH','hh','nn','ss','m','d','H','h','n'];
+  var out = pattern;
+  order.forEach(function(t){ out = out.split(t).join('\u0000'+t+'\u0000'); });
+  out = out.replace(/\u0000([a-zA-Z]+)\u0000/g, function(_, t){ return tokens[t] != null ? tokens[t] : t; });
+  return out;
 }
 
 function formatDateValue(dateStr) {
@@ -9817,6 +9861,20 @@ function getCalendarDates() {
 }
 function saveCalendarDates(list) { appSettings.calendarDates = list; saveSettings(); }
 
+// ── INDUCTION SETUP ──────────────────────────────────────────────────────
+var DEFAULT_INDUCTION_SESSION_TYPES = ['1:1 Intro','Team Introduction','System / Access Setup','Training / Compliance','Manager Check-in'];
+var DEFAULT_STAKEHOLDER_ROLES = ['Manager (one-up)','IT / Systems','HR / Payroll','Buddy / Peer','Team member','Facilities / Access','External / Training provider'];
+function getInductionSessionTypes() { return appSettings.inductionSessionTypes && appSettings.inductionSessionTypes.length ? appSettings.inductionSessionTypes : DEFAULT_INDUCTION_SESSION_TYPES.slice(); }
+function saveInductionSessionTypes(list) { appSettings.inductionSessionTypes = list.filter(Boolean); saveSettings(); }
+function getStakeholderRoles() { return appSettings.stakeholderRoles && appSettings.stakeholderRoles.length ? appSettings.stakeholderRoles : DEFAULT_STAKEHOLDER_ROLES.slice(); }
+function saveStakeholderRoles(list) { appSettings.stakeholderRoles = list.filter(Boolean); saveSettings(); }
+// Template pairings: { 'session type OR stakeholder role': 'tpl:<id>' | 'word:<id>' }
+function getInductionPairings() { return appSettings.inductionPairings || {}; }
+function saveInductionPairing(key, val) { appSettings.inductionPairings = appSettings.inductionPairings||{}; appSettings.inductionPairings[key] = val; saveSettings(); }
+// Reusable induction plan templates: [{ id, name, sessions:[{type, role, template, dayOffset}] }]
+function getInductionPlanTemplates() { return appSettings.inductionPlanTemplates || []; }
+function saveInductionPlanTemplates(list) { appSettings.inductionPlanTemplates = list; saveSettings(); }
+
 // Profile Layout editor helpers (operate on the Settings UI)
 var _plEditTabs = null;
 function plGetLayoutFromUI() {
@@ -10799,7 +10857,10 @@ function renderLcJourney() {
           <div class="cases-list">${cases.map(c=>caseCard(c)).join('')}</div>` : ''}
       </div>
       <div>
-        <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:10px;">${stage.label}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);">${stage.label}</div>
+          <button class="btn btn-sm" style="font-size:11px;" onclick="openStepManager('${lcJourneyId}','${stage.id}')">⇅ Manage steps</button>
+        </div>
         <div class="steps-area">
           ${getStageSteps(lcJourneyId, stage.id).filter(s=>!s._deleted).map(step=>renderStep(Object.assign({},step,{journeyId:lcJourneyId,stageId:stage.id}), null)).join('')}
           <button class="btn btn-sm btn-ghost" style="margin-top:8px;" onclick="openAddStepModal('${lcJourneyId}','${stage.id}')">
@@ -10940,10 +11001,25 @@ function renderLcCase() {
     </div>`;
 }
 
+// Generate a Word merge doc from a case's data (for step buttons)
+function stepGenerateWord(wtId, caseId) {
+  var cs = caseId && caseId !== 'null' ? loadCases().find(function(c){ return c.id === caseId; }) : null;
+  var vals = cs ? resolveEntityFields(cs, 'case') : {};
+  var wt = getWordTemplates().find(function(t){ return t.id === wtId; });
+  var outName = cs && cs.employee ? cs.employee : (wt ? wt.name : 'document');
+  if (wt && wt.nameTemplate) {
+    outName = wt.nameTemplate.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return vals[k.trim().toUpperCase()] || vals[k.trim()] || ''; }).replace(/[\/\\:*?"<>|]/g,'-').trim() || outName;
+  }
+  mergeWordDoc(wtId, vals, outName);
+}
+
 function renderStep(step, caseObj) {
   const status = caseObj ? ((caseObj.stepStatus||{})[step.id]||'todo') : 'todo';
   const note = caseObj ? ((caseObj.stepNotes||{})[step.id]||'') : '';
-  const linkedTpls = (step.tplIds||[]).map(tid=>data.templates.find(t=>t.id===tid)).filter(Boolean);
+  const linkedTpls = (step.tplIds||[]).map(function(tid){
+    if (String(tid).indexOf('word:') === 0) { var w = getWordTemplates().find(function(x){ return x.id === tid.slice(5); }); return w ? { id: tid, name: w.name, _word: true } : null; }
+    return data.templates.find(function(t){ return t.id === tid; });
+  }).filter(Boolean);
   const statusIcon = status==='done'
     ? '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>'
     : '<svg viewBox="0 0 24 24"></svg>';
@@ -10963,7 +11039,7 @@ function renderStep(step, caseObj) {
           </div>
         </div>
                 <div class="step-actions">
-          ${linkedTpls.map(t=>`<button class="step-tpl-btn" onclick="generateFromCase('${t.id}',${caseObj?`'${caseObj.id}'`:'null'})">📄 ${t.name}</button>`).join('')}
+          ${linkedTpls.map(t=>`<button class="step-tpl-btn" onclick="${t._word?`stepGenerateWord('${t.id.slice(5)}',${caseObj?`'${caseObj.id}'`:'null'})`:`generateFromCase('${t.id}',${caseObj?`'${caseObj.id}'`:'null'})`}">${t._word?'📄':'📄'} ${t.name}</button>`).join('')}
           ${linkedTpls.length > 1 && caseObj ? `<button class="step-tpl-btn" style="background:var(--teal);color:white;border-color:var(--teal);" onclick="openStepPackage('${step.id}','${step.journeyId||''}','${step.stageId||''}','${caseObj.id}')">📦 Package (${linkedTpls.length})</button>` : ''}
           <button class="step-tpl-btn" style="background:var(--bg);color:var(--text3);border-color:var(--border);" onclick="openStepEditor(this.dataset.j,this.dataset.s,this.dataset.id)" data-j="${step.journeyId||''}" data-s="${step.stageId||''}" data-id="${step.id}">⚙ Edit</button>
         </div>
@@ -11467,6 +11543,53 @@ function showTopicDetail(topic) {
 
 
 // ── STEP EDITOR ───────────────────────────────────────────────────────────
+// Step manager — reorder / rename / delete steps in a stage (edits the journey template)
+function openStepManager(journeyId, stageId) {
+  var steps = getStageSteps(journeyId, stageId).filter(function(s){ return !s._deleted; });
+  var rows = steps.map(function(s, i){
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+      + '<div style="display:flex;flex-direction:column;gap:1px;">'
+      + '<button onclick="moveStep(\''+journeyId+'\',\''+stageId+'\','+i+',-1)" '+(i===0?'disabled':'')+' style="border:none;background:none;cursor:pointer;font-size:11px;color:'+(i===0?'var(--border)':'var(--text3)')+';padding:0;">▲</button>'
+      + '<button onclick="moveStep(\''+journeyId+'\',\''+stageId+'\','+i+',1)" '+(i===steps.length-1?'disabled':'')+' style="border:none;background:none;cursor:pointer;font-size:11px;color:'+(i===steps.length-1?'var(--border)':'var(--text3)')+';padding:0;">▼</button>'
+      + '</div>'
+      + '<span style="font-size:11px;color:var(--text3);width:20px;">'+(i+1)+'.</span>'
+      + '<input value="'+(s.title||'').replace(/"/g,'&quot;')+'" onchange="renameStep(\''+journeyId+'\',\''+stageId+'\',\''+s.id+'\',this.value)" style="flex:1;font-size:12.5px;">'
+      + '<button class="btn btn-sm" onclick="deleteStepFromManager(\''+journeyId+'\',\''+stageId+'\',\''+s.id+'\')" style="color:var(--red);font-size:11px;">✕</button>'
+      + '</div>';
+  }).join('');
+  var html = '<div class="overlay open" id="stepMgrModal" style="z-index:10000;"><div class="modal" style="width:460px;max-height:80vh;overflow-y:auto;">'
+    + '<div class="modal-title">Manage steps</div>'
+    + '<p style="font-size:12px;color:var(--text3);margin:0 0 12px;">Reorder, rename, or remove steps. Changes apply to future cases of this journey.</p>'
+    + (rows || '<div style="font-size:12.5px;color:var(--text3);font-style:italic;">No steps yet.</div>')
+    + '<div class="modal-footer"><button class="btn btn-primary" onclick="document.getElementById(\'stepMgrModal\').remove()">Done</button></div>'
+    + '</div></div>';
+  var wrap = document.createElement('div'); wrap.innerHTML = html; document.body.appendChild(wrap.firstChild);
+}
+function moveStep(journeyId, stageId, idx, dir) {
+  var steps = getStageSteps(journeyId, stageId).filter(function(s){ return !s._deleted; });
+  var ni = idx + dir;
+  if (ni < 0 || ni >= steps.length) return;
+  var tmp = steps[idx]; steps[idx] = steps[ni]; steps[ni] = tmp;
+  saveStageSteps(journeyId, stageId, steps);
+  document.getElementById('stepMgrModal').remove();
+  openStepManager(journeyId, stageId);
+  if (typeof renderLcJourney === 'function' && lcView === 'journey') renderLcJourney();
+}
+function renameStep(journeyId, stageId, stepId, newTitle) {
+  var steps = getStageSteps(journeyId, stageId).slice();
+  var s = steps.find(function(x){ return x.id === stepId; });
+  if (s) { s.title = newTitle.trim(); saveStageSteps(journeyId, stageId, steps); }
+}
+function deleteStepFromManager(journeyId, stageId, stepId) {
+  if (!confirm('Remove this step?')) return;
+  var steps = getStageSteps(journeyId, stageId).filter(function(s){ return s.id !== stepId; });
+  saveStageSteps(journeyId, stageId, steps);
+  document.getElementById('stepMgrModal').remove();
+  openStepManager(journeyId, stageId);
+  if (typeof renderLcJourney === 'function' && lcView === 'journey') renderLcJourney();
+}
+
+// Step manager — reorder / rename / delete steps in a stage (edits the journey template)
 function openStepEditor(journeyId, stageId, stepId) {
   // Find the step within its stage's steps
   var step = null;
@@ -11499,12 +11622,12 @@ function openStepEditor(journeyId, stageId, stepId) {
   const linkedIds = step.tplIds || [];
   const allTpls = data.templates;
 
-  if (!allTpls.length) {
+  if (!allTpls.length && !getWordTemplates().length) {
     picker.innerHTML = '<div style="font-size:12px;color:var(--text3);">No templates yet — create some in the Templates tab first.</div>';
   } else {
-    // Group by category
+    // Group email/letter templates by category
     const cats = [...new Set(allTpls.map(t => t.category))];
-    picker.innerHTML = cats.map(cat => {
+    var html = cats.map(cat => {
       const catTpls = allTpls.filter(t => t.category === cat);
       return `<div style="margin-bottom:8px;">
         <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">${cat}</div>
@@ -11517,6 +11640,20 @@ function openStepEditor(journeyId, stageId, stepId) {
           </label>`).join('')}
       </div>`;
     }).join('');
+    // Word merge templates group
+    var wts = getWordTemplates();
+    if (wts.length) {
+      html += '<div style="margin-bottom:8px;">'
+        + '<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Word Merge Templates</div>'
+        + wts.map(function(w){
+          return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;">'
+            + '<input type="checkbox" value="word:'+w.id+'"'+(linkedIds.indexOf('word:'+w.id)!==-1?' checked':'')+' style="accent-color:var(--teal);width:14px;height:14px;">'
+            + '<span style="flex:1;color:var(--text);">'+w.name+'</span>'
+            + '<span style="font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:8px;background:#EEF2FB;color:#3B5BAD;">DOCX</span>'
+            + '</label>';
+        }).join('') + '</div>';
+    }
+    picker.innerHTML = html;
   }
 
   document.getElementById('stepModal').classList.add('open');
@@ -12501,6 +12638,7 @@ function renderSettings() {
     { id:'awards',          label:'Awards & Classifications' },
     { id:'candStages',      label:'Candidate Stages' },
     { id:'recruitActions',  label:'Recruitment Actions' },
+    { id:'inductionSetup',  label:'Induction Setup' },
     { id:'profileLayout',   label:'Profile Layout' },
     { id:'calendarDates',   label:'Calendar Dates' },
     { id:'schedPresets',    label:'Schedule Presets' },
@@ -13082,6 +13220,41 @@ function renderSettingsSection() {
         }).join('') || '<p style="color:var(--text3);font-style:italic;font-size:13px;">No date fields found. Add date-type fields to your forms first.</p>'}
       </div>
       <button class="btn btn-sm btn-primary" style="margin-top:12px;" onclick="saveCalendarDatesFromUI()">Save calendar dates</button>
+    </div>`;
+    return;
+  }
+
+  if (settingsSection === 'inductionSetup') {
+    var sTypes = getInductionSessionTypes();
+    var sRoles = getStakeholderRoles();
+    var pairings = getInductionPairings();
+    var emailTpls = data.templates.filter(function(t){ return t.format === 'email' || t.format === 'letter'; });
+    var wordTpls = getWordTemplates();
+    var pairSelect = function(key){
+      var cur = pairings[key] || '';
+      var opts = '<option value="">— No default —</option>';
+      opts += '<optgroup label="Email/Letter">' + emailTpls.map(function(t){ return '<option value="tpl:'+t.id+'"'+(cur==='tpl:'+t.id?' selected':'')+'>'+t.name+'</option>'; }).join('') + '</optgroup>';
+      if (wordTpls.length) opts += '<optgroup label="Word">' + wordTpls.map(function(t){ return '<option value="word:'+t.id+'"'+(cur==='word:'+t.id?' selected':'')+'>'+t.name+' (Word)</option>'; }).join('') + '</optgroup>';
+      return '<select onchange="saveInductionPairing(\''+key.replace(/'/g,"\\'")+'\',this.value)" style="font-size:12px;padding:3px 6px;min-width:180px;">'+opts+'</select>';
+    };
+    el.innerHTML = `<div class="settings-section">
+      <h3>Induction Setup</h3>
+      <p>Define the building blocks for induction planning: session types, stakeholder roles, and the default template paired to each. You'll assemble these into a plan (with per-person overrides) when you induct someone.</p>
+
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:18px 0 6px;">Session types</div>
+      <p style="font-size:12px;color:var(--text2);margin:0 0 6px;">One per line.</p>
+      <textarea id="indSessionTypes" rows="5" style="width:100%;max-width:460px;box-sizing:border-box;font-size:13px;">${sTypes.join('\n')}</textarea>
+      <div><button class="btn btn-sm btn-primary" style="margin-top:6px;" onclick="saveInductionSessionTypes(document.getElementById('indSessionTypes').value.split('\\n').map(function(s){return s.trim();}).filter(Boolean));renderSettingsSection();toast('Session types saved')">Save session types</button></div>
+
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:20px 0 6px;">Stakeholder roles</div>
+      <textarea id="indRoles" rows="5" style="width:100%;max-width:460px;box-sizing:border-box;font-size:13px;">${sRoles.join('\n')}</textarea>
+      <div><button class="btn btn-sm btn-primary" style="margin-top:6px;" onclick="saveStakeholderRoles(document.getElementById('indRoles').value.split('\\n').map(function(s){return s.trim();}).filter(Boolean));renderSettingsSection();toast('Roles saved')">Save roles</button></div>
+
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:20px 0 8px;">Default template per session type</div>
+      <div style="display:flex;flex-direction:column;gap:6px;max-width:520px;">
+        ${sTypes.map(function(t){ return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;background:var(--bg);border-radius:var(--r-sm);"><span style="font-size:13px;">'+t+'</span>'+pairSelect(t)+'</div>'; }).join('')}
+      </div>
+      <p style="font-size:11.5px;color:var(--text3);margin-top:8px;">These are defaults — you can override the template for any session when building a specific induction plan.</p>
     </div>`;
     return;
   }
