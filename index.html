@@ -9919,7 +9919,7 @@ function openInductionPlanner(personId) {
   };
 
   var sessionRows = (plan.sessions||[]).map(function(s, i){
-    return '<div style="display:grid;grid-template-columns:1fr 1.1fr 0.75fr 0.55fr 0.5fr 0.9fr 1fr auto;gap:5px;align-items:center;padding:8px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+    return '<div style="display:grid;grid-template-columns:0.9fr 1fr 0.7fr 0.5fr 0.45fr 0.8fr 0.9fr auto auto;gap:4px;align-items:center;padding:8px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
       + '<select onchange="_indSet('+i+',\'type\',this.value)" style="font-size:11px;">'+sTypes.map(function(t){ return '<option'+(s.type===t?' selected':'')+'>'+t+'</option>'; }).join('')+'</select>'
       + '<select onchange="_indSet('+i+',\'person\',this.value)" style="font-size:11px;">'+personOptions(s.person)+'</select>'
       + '<input type="date" value="'+(s.date||'')+'" onchange="_indSet('+i+',\'date\',this.value)" style="font-size:10.5px;">'
@@ -9927,6 +9927,7 @@ function openInductionPlanner(personId) {
       + '<input type="number" min="5" step="5" value="'+(s.duration||30)+'" onchange="_indSet('+i+',\'duration\',this.value)" title="Minutes" style="font-size:10.5px;">'
       + '<input value="'+(s.location||'').replace(/"/g,'&quot;')+'" placeholder="Location" onchange="_indSet('+i+',\'location\',this.value)" style="font-size:10.5px;">'
       + '<select onchange="_indSet('+i+',\'template\',this.value)" style="font-size:11px;">'+tplOptions(s.template)+'</select>'
+      + '<button onclick="openSessionInOutlook('+i+')" title="Open pre-filled meeting in Outlook" style="border:1px solid var(--teal);background:var(--teal);color:white;font-size:10px;padding:4px 6px;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap;">📅 Outlook</button>'
       + '<button onclick="_indRemove('+i+')" style="border:none;background:none;color:var(--red);cursor:pointer;">✕</button>'
       + '</div>';
   }).join('');
@@ -9939,14 +9940,14 @@ function openInductionPlanner(personId) {
     + '<div class="modal-title">Induction plan — '+ (getEntityDisplayName(p,pfDefs)||'') +'</div>'
     + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;">Add induction sessions. Each pairs a stakeholder with a session type and its own template (defaults from Settings, override here).</p>'
     + (planTpls.length ? '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;"><span style="font-size:12px;color:var(--text3);">Apply template:</span><select id="indApplyTpl" style="font-size:12px;"><option value="">— Choose —</option>'+planTpls.map(function(t,i){ return '<option value="'+i+'">'+t.name+'</option>'; }).join('')+'</select><button class="btn btn-sm" onclick="applyInductionTemplate()">Apply</button></div>' : '')
-    + '<div style="display:grid;grid-template-columns:1fr 1.1fr 0.75fr 0.55fr 0.5fr 0.9fr 1fr auto;gap:5px;font-size:9.5px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:0 8px 4px;"><span>Type</span><span>Who with</span><span>Date</span><span>Time</span><span>Mins</span><span>Location</span><span>Invite template</span><span></span></div>'
+    + '<div style="display:grid;grid-template-columns:0.9fr 1fr 0.7fr 0.5fr 0.45fr 0.8fr 0.9fr auto auto;gap:4px;font-size:9px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:0 8px 4px;"><span>Type</span><span>Who</span><span>Date</span><span>Time</span><span>Min</span><span>Location</span><span>Template</span><span></span><span></span></div>'
     + '<div id="indSessions">'+ (sessionRows || '<div style="font-size:12.5px;color:var(--text3);font-style:italic;padding:8px;">No sessions yet.</div>') +'</div>'
     + '<div style="display:flex;gap:8px;margin-top:8px;"><button class="btn btn-sm" onclick="_indAdd()">+ Add session</button><button class="btn btn-sm" onclick="saveInductionAsTemplate()">Save as plan template</button></div>'
+    + '<p style="font-size:11px;color:var(--text3);margin:10px 0 0;">Each session\'s <strong>📅 Outlook</strong> button opens a pre-filled meeting in Outlook (time, attendees, location, and the invite template content) for you to review and send.</p>'
     + '<div class="modal-footer" style="flex-wrap:wrap;gap:6px;">'
     + '<button class="btn" onclick="document.getElementById(\'inductionModal\').remove()">Close</button>'
     + '<div style="flex:1;"></div>'
     + '<button class="btn" onclick="generateWelcomeEmail()">✉ Welcome email</button>'
-    + '<button class="btn" onclick="generateInductionICS()">📅 Calendar invites (.ics)</button>'
     + '<button class="btn btn-primary" onclick="generateInductionSchedule()">📄 Schedule document</button>'
     + '</div></div>';
   modal.classList.add('open');
@@ -10011,6 +10012,48 @@ function _indSessionValues(s, newStarter, pfDefs) {
   vals['NEW STARTER'] = getEntityDisplayName(newStarter, pfDefs);
   return { vals: vals, stake: stake };
 }
+// Open a pre-filled Outlook calendar compose window for a session (deep link)
+function openSessionInOutlook(i) {
+  var pid = window._indPersonId;
+  var newStarter = getPeople().find(function(x){ return x.id===pid; });
+  var pfDefs = getProfileFields();
+  var plan = getInduction(pid);
+  var s = plan.sessions[i];
+  if (!s) return;
+  var ctx = _indSessionValues(s, newStarter, pfDefs);
+  var starterName = getEntityDisplayName(newStarter, pfDefs);
+  var stakeName = ctx.stake ? getEntityDisplayName(ctx.stake, pfDefs) : '';
+  // Body from the invite template
+  var body = '';
+  var tpl = _indSessionTemplate(s);
+  if (tpl && tpl.indexOf('tpl:')===0) {
+    var t = data.templates.find(function(x){ return x.id===tpl.slice(4); });
+    if (t) { var saved=fieldValues; fieldValues=ctx.vals; var h=outlookBody(t,true); fieldValues=saved;
+      body = h.replace(/<\/(p|div|tr|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{3,}/g,'\n\n').trim(); }
+  }
+  var subject = 'Induction: ' + s.type + ' - ' + starterName + (stakeName?(' with '+stakeName):'');
+  var attendees = [];
+  if (newStarter.pf_email) attendees.push(newStarter.pf_email);
+  if (ctx.stake && ctx.stake.pf_email) attendees.push(ctx.stake.pf_email);
+  var params = [];
+  params.push('subject=' + encodeURIComponent(subject));
+  if (body) params.push('body=' + encodeURIComponent(body));
+  if (s.location) params.push('location=' + encodeURIComponent(s.location));
+  if (attendees.length) params.push('to=' + encodeURIComponent(attendees.join(';')));
+  if (s.date && s.time) {
+    // Outlook deep link uses ISO datetimes
+    var start = s.date + 'T' + s.time + ':00';
+    var sd = new Date(start); sd.setMinutes(sd.getMinutes() + (+s.duration||30));
+    var end = sd.toISOString().slice(0,19);
+    params.push('startdt=' + encodeURIComponent(start));
+    params.push('enddt=' + encodeURIComponent(end));
+  } else if (s.date) {
+    params.push('startdt=' + encodeURIComponent(s.date) + '&allday=true');
+  }
+  var url = 'https://outlook.office.com/calendar/0/deeplink/compose?' + params.join('&');
+  window.open(url, '_blank');
+}
+
 // Welcome email to the new starter + their direct manager (from the welcome template)
 function generateWelcomeEmail() {
   var pid = window._indPersonId;
@@ -10586,16 +10629,61 @@ function renderCalendar() {
 
 // Determine a person's status (for colour + filter). Reads a Status field if present,
 // else infers from employment type / leave fields.
+// Write a case's end date back to the linked person's profile (offboarding link)
+function syncCaseEndDateToProfile(c) {
+  if (!c || !c.personId || !c._dynValues) return;
+  var people = getPeople();
+  var p = people.find(function(x){ return x.id === c.personId; });
+  if (!p) return;
+  // Find an end-date value in the case
+  var endVal = '';
+  Object.keys(c._dynValues).forEach(function(k){
+    var def = getFieldByAnyId(k);
+    var lbl = def ? def.label : k;
+    if (/end date|termination|last day|departure|cessation/i.test(lbl) && c._dynValues[k]) endVal = c._dynValues[k];
+  });
+  if (!endVal) return;
+  // Write to the person's matching end-date field (or a generic endDate)
+  var pfDefs = getProfileFields();
+  var endField = pfDefs.find(function(f){ return /end date|termination|last day|departure|cessation/i.test(f.label); });
+  if (endField) p[endField.fid || endField.id] = endVal;
+  else p.endDate = endVal;
+  savePeople(people);
+  if (typeof addHistory === 'function') addHistory(p.id, 'End date set', 'From offboarding case — ' + formatDateValue(endVal));
+}
+
 function getPersonStatus(p) {
+  var pfDefs = (typeof getProfileFields==='function') ? getProfileFields() : [];
+  var today = new Date(); today.setHours(0,0,0,0);
+  var readByLabel = function(re){
+    var f = pfDefs.find(function(x){ return re.test(x.label||''); });
+    if (!f) return '';
+    var v = p[f.fid] || p[f.id] || '';
+    if (!v && f.aliasIds) f.aliasIds.forEach(function(a){ if(!v&&p[a]) v=p[a]; });
+    return v;
+  };
+  var startRaw = readByLabel(/start date|commencement/i) || p.pf_startdate || '';
+  var endRaw = readByLabel(/end date|termination|last day|departure|cessation/i) || p.pf_enddate || p.endDate || '';
+  var startISO = startRaw ? toISODate(startRaw) : '';
+  var endISO = endRaw ? toISODate(endRaw) : '';
+  // Departed: end date today or past
+  if (endISO) { var ed = new Date(endISO+'T00:00:00'); if (ed <= today) return 'Departed'; }
+  // Pre-start: start date in the future
+  if (startISO) { var sd = new Date(startISO+'T00:00:00'); if (sd > today) return 'Pre-start'; }
+  // Explicit status field override (if someone set it manually)
   var s = (p.pf_status || p.status || '').toString().toLowerCase();
   if (/probation/.test(s)) return 'Probation';
-  if (/leav|terminat|exit|ceased|inactive/.test(s)) return 'Inactive';
-  if (/active|current|employed/.test(s)) return 'Active';
-  // infer
-  for (var k in p) { if (/status/i.test(k) && typeof p[k]==='string') { var v=p[k].toLowerCase(); if(/probation/.test(v))return'Probation'; if(/leav|terminat|inactive|ceased/.test(v))return'Inactive'; if(/active|current/.test(v))return'Active'; } }
+  if (/leav|terminat|exit|ceased|inactive|depart/.test(s)) return 'Departed';
   return 'Active';
 }
 var STATUS_STYLE = {
+  'Active':    { avatar:'var(--teal)',   pillBg:'var(--teal-lt)',  pillFg:'var(--teal)' },
+  'Pre-start': { avatar:'#3B82F6',       pillBg:'#EAF1FE',         pillFg:'#3B82F6' },
+  'Probation': { avatar:'#B8791A',       pillBg:'#FEF3E2',         pillFg:'#B8791A' },
+  'Departed':  { avatar:'#6B7280',       pillBg:'#F1F1F0',         pillFg:'#6B7280' },
+  'Inactive':  { avatar:'#6B7280',       pillBg:'#F1F1F0',         pillFg:'#6B7280' }
+};
+var _OLD_STATUS_STYLE = {
   'Active':    { avatar:'var(--teal)',   pillBg:'var(--teal-lt)',  pillFg:'var(--teal)' },
   'Probation': { avatar:'#B8791A',       pillBg:'#FEF3E2',         pillFg:'#B8791A' },
   'Inactive':  { avatar:'#6B7280',       pillBg:'#F1F1F0',         pillFg:'#6B7280' }
@@ -10608,7 +10696,7 @@ function renderPeople() {
   var pfDefs = getProfileFields();
   var q = peopleSearchQ.toLowerCase();
   // Counts by status
-  var counts = { All: people.length, Active:0, Probation:0, Inactive:0 };
+  var counts = { All: people.length, 'Pre-start':0, Active:0, Probation:0, Departed:0 };
   people.forEach(function(p){ counts[getPersonStatus(p)] = (counts[getPersonStatus(p)]||0)+1; });
   var filtered = people.filter(function(p){
     if (peopleStatusFilter !== 'All' && getPersonStatus(p) !== peopleStatusFilter) return false;
@@ -10636,7 +10724,7 @@ function renderPeople() {
         <button class="btn btn-primary" onclick="openPersonModal()">+ Add person</button>
       </div></div>
     <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
-      ${chip('All','All')}${chip('Active','Active')}${chip('Probation','Probation')}${chip('Inactive','Inactive')}
+      ${chip('All','All')}${chip('Pre-start','Pre-start')}${chip('Active','Active')}${chip('Probation','Probation')}${chip('Departed','Departed')}
     </div>
     ${filtered.length ? `<div style="border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:white;">
       ${filtered.map(function(p, idx){
@@ -11461,6 +11549,8 @@ function saveCase() {
   }
 
   saveCases(cases);
+  // Offboarding writeback: if this case has a linked person and an end date, write it to their profile
+  try { syncCaseEndDateToProfile(c); } catch(e) {}
   document.getElementById('caseModal').dataset.editId = '';
   document.getElementById('caseModal').classList.remove('open');
   if (!isEdit) {
