@@ -860,6 +860,7 @@ nav{height:54px;background:var(--slate);display:flex;align-items:center;padding:
               <select id="mFmt" style="width:100%;box-sizing:border-box;">
                 <option value="email">Email</option>
                 <option value="letter">Letter</option>
+                <option value="invite">Invite (meeting)</option>
                 <option value="advice">Advice Note</option>
                 <option value="guide">Guide / Policy Doc</option>
               </select>
@@ -2699,8 +2700,8 @@ function renderTemplate(item) {
 
   const sysLabel = {national:'National System (FW Act)',wa:'WA State System',both:'National + WA'}[item.system||'national']||'';
   const subjectRaw = (item.subject||'').replace(/\{\{([^}]+)\}\}/g, (_,k) => fieldValues[k]||'{{'+k+'}}');
-  const fmtOptions = ['email','letter','advice','guide'].map(f =>
-    `<option value="${f}" ${item.format===f?'selected':''}>${{email:'Email',letter:'Letter',advice:'Advice Note',guide:'Guide / Policy Doc'}[f]}</option>`
+  const fmtOptions = ['email','letter','invite','advice','guide'].map(f =>
+    `<option value="${f}" ${item.format===f?'selected':''}>${{email:'Email',letter:'Letter',invite:'Invite (meeting)',advice:'Advice Note',guide:'Guide / Policy Doc'}[f]}</option>`
   ).join('');
 
   // Condition controls — detect what conditions blocks use
@@ -7692,6 +7693,14 @@ function getAllPlaceholders() {
   // Dynamic date placeholders
   add("Today", 'Dates', 'text');
   add("Todays Date", 'Dates', 'text');
+  // Induction / meeting placeholders
+  add('Stakeholder Name', 'Induction', 'text');
+  add('Stakeholder Email', 'Induction', 'text');
+  add('Stakeholder Title', 'Induction', 'text');
+  add('Session Type', 'Induction', 'text');
+  add('Session Date', 'Induction', 'text');
+  add('Session Location', 'Induction', 'text');
+  add('New Starter', 'Induction', 'text');
   // Recruitment placeholders
   add('Applicant Name', 'Recruitment', 'text');
   add('One Up Manager', 'Recruitment', 'text');
@@ -9899,10 +9908,10 @@ function openInductionPlanner(personId) {
   var emailTpls = data.templates.filter(function(t){ return t.format==='email'||t.format==='letter'; });
   var wordTpls = getWordTemplates();
 
+  var inviteTpls = data.templates.filter(function(t){ return t.format === 'invite'; });
   var tplOptions = function(sel){
     var o = '<option value="">— Default for type —</option>';
-    o += emailTpls.map(function(t){ return '<option value="tpl:'+t.id+'"'+(sel==='tpl:'+t.id?' selected':'')+'>'+t.name+'</option>'; }).join('');
-    o += wordTpls.map(function(t){ return '<option value="word:'+t.id+'"'+(sel==='word:'+t.id?' selected':'')+'>'+t.name+' (Word)</option>'; }).join('');
+    o += inviteTpls.map(function(t){ return '<option value="tpl:'+t.id+'"'+(sel==='tpl:'+t.id?' selected':'')+'>'+t.name+'</option>'; }).join('');
     return o;
   };
   var personOptions = function(sel){
@@ -9910,10 +9919,11 @@ function openInductionPlanner(personId) {
   };
 
   var sessionRows = (plan.sessions||[]).map(function(s, i){
-    return '<div style="display:grid;grid-template-columns:1.2fr 1.4fr 0.8fr 1.4fr auto;gap:6px;align-items:center;padding:8px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+    return '<div style="display:grid;grid-template-columns:1fr 1.2fr 0.8fr 1fr 1.2fr auto;gap:6px;align-items:center;padding:8px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
       + '<select onchange="_indSet('+i+',\'type\',this.value)" style="font-size:11.5px;">'+sTypes.map(function(t){ return '<option'+(s.type===t?' selected':'')+'>'+t+'</option>'; }).join('')+'</select>'
       + '<select onchange="_indSet('+i+',\'person\',this.value)" style="font-size:11.5px;">'+personOptions(s.person)+'</select>'
       + '<input type="date" value="'+(s.date||'')+'" onchange="_indSet('+i+',\'date\',this.value)" style="font-size:11px;">'
+      + '<input value="'+(s.location||'').replace(/"/g,'&quot;')+'" placeholder="Location" onchange="_indSet('+i+',\'location\',this.value)" style="font-size:11px;">'
       + '<select onchange="_indSet('+i+',\'template\',this.value)" style="font-size:11.5px;">'+tplOptions(s.template)+'</select>'
       + '<button onclick="_indRemove('+i+')" style="border:none;background:none;color:var(--red);cursor:pointer;">✕</button>'
       + '</div>';
@@ -9927,13 +9937,13 @@ function openInductionPlanner(personId) {
     + '<div class="modal-title">Induction plan — '+ (getEntityDisplayName(p,pfDefs)||'') +'</div>'
     + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;">Add induction sessions. Each pairs a stakeholder with a session type and its own template (defaults from Settings, override here).</p>'
     + (planTpls.length ? '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;"><span style="font-size:12px;color:var(--text3);">Apply template:</span><select id="indApplyTpl" style="font-size:12px;"><option value="">— Choose —</option>'+planTpls.map(function(t,i){ return '<option value="'+i+'">'+t.name+'</option>'; }).join('')+'</select><button class="btn btn-sm" onclick="applyInductionTemplate()">Apply</button></div>' : '')
-    + '<div style="display:grid;grid-template-columns:1.2fr 1.4fr 0.8fr 1.4fr auto;gap:6px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:0 8px 4px;"><span>Session type</span><span>Who with</span><span>Date</span><span>Template</span><span></span></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1.2fr 0.8fr 1fr 1.2fr auto;gap:6px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:0 8px 4px;"><span>Session type</span><span>Who with</span><span>Date</span><span>Location</span><span>Invite template</span><span></span></div>'
     + '<div id="indSessions">'+ (sessionRows || '<div style="font-size:12.5px;color:var(--text3);font-style:italic;padding:8px;">No sessions yet.</div>') +'</div>'
     + '<div style="display:flex;gap:8px;margin-top:8px;"><button class="btn btn-sm" onclick="_indAdd()">+ Add session</button><button class="btn btn-sm" onclick="saveInductionAsTemplate()">Save as plan template</button></div>'
     + '<div class="modal-footer" style="flex-wrap:wrap;gap:6px;">'
     + '<button class="btn" onclick="document.getElementById(\'inductionModal\').remove()">Close</button>'
     + '<div style="flex:1;"></div>'
-    + '<button class="btn" onclick="generateInductionEmails()">✉ Stakeholder emails</button>'
+    + '<button class="btn" onclick="generateWelcomeEmail()">✉ Welcome email</button>'
     + '<button class="btn" onclick="generateInductionICS()">📅 Calendar invites (.zip)</button>'
     + '<button class="btn btn-primary" onclick="generateInductionSchedule()">📄 Schedule document</button>'
     + '</div></div>';
@@ -9995,30 +10005,29 @@ function _indSessionValues(s, newStarter, pfDefs) {
   }
   vals['SESSION TYPE'] = s.type || '';
   vals['SESSION DATE'] = s.date ? formatDateValue(s.date) : '';
+  vals['SESSION LOCATION'] = s.location || '';
   vals['NEW STARTER'] = getEntityDisplayName(newStarter, pfDefs);
   return { vals: vals, stake: stake };
 }
-function generateInductionEmails() {
+// Welcome email to the new starter + their direct manager (from the welcome template)
+function generateWelcomeEmail() {
   var pid = window._indPersonId;
   var newStarter = getPeople().find(function(x){ return x.id===pid; });
-  var plan = getInduction(pid); var pfDefs = getProfileFields();
-  var saved = fieldValues; var count = 0;
-  (plan.sessions||[]).forEach(function(s, i){
-    var tpl = _indSessionTemplate(s);
-    if (!tpl || tpl.indexOf('tpl:')!==0) return; // only email templates here
-    var t = data.templates.find(function(x){ return x.id===tpl.slice(4); });
-    if (!t) return;
-    var ctx = _indSessionValues(s, newStarter, pfDefs);
-    fieldValues = ctx.vals;
-    var subj = (t.subject||t.name||'').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()]||fieldValues[k.trim()]||''; });
-    var bodyHtml = outlookBody(t, true);
-    var bodyText = bodyHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-    var to = ctx.stake ? ctx.stake.pf_email : '';
-    (function(nm,sj,bt,bh,to){ setTimeout(function(){ buildAndDownloadEml(nm, sj, bt, bh, [], to); }, i*400); })(t.name+' - '+(ctx.stake?getEntityDisplayName(ctx.stake,pfDefs):'stakeholder'), subj, bodyText, bodyHtml, to);
-    count++;
-  });
+  var pfDefs = getProfileFields();
+  var assigned = getInductionPairings()['__welcome__'] || '';
+  if (!assigned || assigned.indexOf('tpl:')!==0) { alert('Assign a welcome email template in Settings → Induction Setup first.'); return; }
+  var t = data.templates.find(function(x){ return x.id===assigned.slice(4); });
+  if (!t) { alert('Welcome template not found — reassign in Settings.'); return; }
+  var saved = fieldValues;
+  fieldValues = resolveEntityFields(newStarter, 'people');
+  var subj = (t.subject||t.name||'').replace(/\{\{([^}]+)\}\}/g, function(_,k){ return fieldValues[k.trim().toUpperCase()]||fieldValues[k.trim()]||''; });
+  var bodyHtml = outlookBody(t, true);
+  var bodyText = bodyHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+  var to = newStarter.pf_email || fieldValues['EMAIL'] || '';
+  var cc = fieldValues['MANAGER EMAIL'] || '';   // direct manager, auto-resolved
   fieldValues = saved;
-  toast(count?('Generating '+count+' stakeholder email'+(count>1?'s':'')+'…'):'No email templates paired to sessions');
+  buildAndDownloadEml(t.name + ' - ' + getEntityDisplayName(newStarter,pfDefs), subj, bodyText, bodyHtml, [], to, cc);
+  toast('Welcome email generated — to new starter, cc manager');
 }
 function generateInductionICS() {
   ensureDocxLibs(function(){
@@ -10027,35 +10036,46 @@ function generateInductionICS() {
     var pfDefs = getProfileFields();
     var plan = getInduction(pid);
     var starterName = getEntityDisplayName(newStarter, pfDefs);
-    var withDates = (plan.sessions||[]).filter(function(s){ return s.date; });
-    if (!withDates.length) { alert('Add dates to your sessions first.'); return; }
+    var sessions = (plan.sessions||[]);
+    if (!sessions.length) { alert('Add sessions first.'); return; }
     if (!window.PizZip) { alert('Calendar library not loaded — try again.'); return; }
+    var saved = fieldValues;
     var zip = new window.PizZip();
-    withDates.forEach(function(s, i){
+    var esc = function(t){ return String(t||'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n'); };
+    sessions.forEach(function(s, i){
       var ctx = _indSessionValues(s, newStarter, pfDefs);
       var stakeName = ctx.stake ? getEntityDisplayName(ctx.stake, pfDefs) : (s.type||'Induction');
-      var dt = (s.date||'').replace(/-/g,'');
-      var summary = s.type + ' — ' + starterName + (ctx.stake?(' with '+stakeName):'');
+      // Fill the invite template body as the description
+      var descBody = '';
+      var tpl = _indSessionTemplate(s);
+      if (tpl && tpl.indexOf('tpl:')===0) {
+        var t = data.templates.find(function(x){ return x.id===tpl.slice(4); });
+        if (t) { fieldValues = ctx.vals; var h = outlookBody(t, true); descBody = h.replace(/<\/(p|div|tr|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{3,}/g,'\n\n').trim(); }
+      }
+      if (!descBody) descBody = s.type + ' — induction session for ' + starterName + (ctx.stake?(' with '+stakeName):'');
+      var summary = 'Induction: ' + s.type + ' — ' + starterName + (ctx.stake?(' with '+stakeName):'');
       var attendees = [];
       if (newStarter.pf_email) attendees.push(newStarter.pf_email);
       if (ctx.stake && ctx.stake.pf_email) attendees.push(ctx.stake.pf_email);
-      var ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ER Adviser//Induction//EN\r\nBEGIN:VEVENT\r\n'
+      var dtLine = s.date ? ('DTSTART;VALUE=DATE:'+s.date.replace(/-/g,'')+'\r\nDTEND;VALUE=DATE:'+s.date.replace(/-/g,'')+'\r\n') : '';
+      var ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ER Adviser//Induction//EN\r\nMETHOD:PUBLISH\r\nBEGIN:VEVENT\r\n'
         + 'UID:ind-'+Date.now()+'-'+i+'@eradviser\r\n'
-        + 'DTSTART;VALUE=DATE:'+dt+'\r\n'
-        + 'DTEND;VALUE=DATE:'+dt+'\r\n'
-        + 'SUMMARY:'+summary.replace(/[,;]/g,' ')+'\r\n'
-        + 'DESCRIPTION:Induction session for '+starterName+'\\nType: '+s.type+(ctx.stake?('\\nWith: '+stakeName):'')+'\r\n'
+        + dtLine
+        + 'SUMMARY:'+esc(summary)+'\r\n'
+        + (s.location ? 'LOCATION:'+esc(s.location)+'\r\n' : '')
+        + 'DESCRIPTION:'+esc(descBody)+'\r\n'
         + attendees.map(function(a){ return 'ATTENDEE;RSVP=TRUE:mailto:'+a+'\r\n'; }).join('')
         + 'END:VEVENT\r\nEND:VCALENDAR\r\n';
       var fname = (s.type+' - '+stakeName).replace(/[^\w \-]/g,'').trim() + '.ics';
       zip.file(fname, ics);
     });
+    fieldValues = saved;
     var blob = zip.generate({ type:'blob', mimeType:'application/zip' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a'); a.href=url; a.download = 'Induction invites - '+starterName+'.zip';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-    toast('Calendar invites downloaded — open each .ics in Outlook to review & send');
+    toast('Calendar invites downloaded — open each .ics in your scheduler to set times & send');
   });
 }
 function generateInductionSchedule() {
@@ -13434,12 +13454,13 @@ function renderSettingsSection() {
     var sRoles = getStakeholderRoles();
     var pairings = getInductionPairings();
     var emailTpls = data.templates.filter(function(t){ return t.format === 'email' || t.format === 'letter'; });
+    var inviteTpls = data.templates.filter(function(t){ return t.format === 'invite'; });
     var wordTpls = getWordTemplates();
     var pairSelect = function(key){
       var cur = pairings[key] || '';
       var opts = '<option value="">— No default —</option>';
+      if (inviteTpls.length) opts += '<optgroup label="Invite templates">' + inviteTpls.map(function(t){ return '<option value="tpl:'+t.id+'"'+(cur==='tpl:'+t.id?' selected':'')+'>'+t.name+'</option>'; }).join('') + '</optgroup>';
       opts += '<optgroup label="Email/Letter">' + emailTpls.map(function(t){ return '<option value="tpl:'+t.id+'"'+(cur==='tpl:'+t.id?' selected':'')+'>'+t.name+'</option>'; }).join('') + '</optgroup>';
-      if (wordTpls.length) opts += '<optgroup label="Word">' + wordTpls.map(function(t){ return '<option value="word:'+t.id+'"'+(cur==='word:'+t.id?' selected':'')+'>'+t.name+' (Word)</option>'; }).join('') + '</optgroup>';
       return '<select onchange="saveInductionPairing(\''+key.replace(/'/g,"\\'")+'\',this.value)" style="font-size:12px;padding:3px 6px;min-width:180px;">'+opts+'</select>';
     };
     el.innerHTML = `<div class="settings-section">
@@ -13455,11 +13476,17 @@ function renderSettingsSection() {
       <textarea id="indRoles" rows="5" style="width:100%;max-width:460px;box-sizing:border-box;font-size:13px;">${sRoles.join('\n')}</textarea>
       <div><button class="btn btn-sm btn-primary" style="margin-top:6px;" onclick="saveStakeholderRoles(document.getElementById('indRoles').value.split('\\n').map(function(s){return s.trim();}).filter(Boolean));renderSettingsSection();toast('Roles saved')">Save roles</button></div>
 
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:20px 0 8px;">Default template per session type</div>
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:20px 0 8px;">Welcome / overview email</div>
+      <p style="font-size:12px;color:var(--text2);margin:0 0 6px;">Sent to the new starter (cc their manager) with an induction overview.</p>
+      <div style="display:flex;align-items:center;gap:10px;max-width:520px;padding:6px 10px;background:var(--bg);border-radius:var(--r-sm);">
+        <span style="font-size:13px;flex:1;">Welcome email template</span>${pairSelect('__welcome__')}
+      </div>
+
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin:20px 0 8px;">Default invite template per session type</div>
       <div style="display:flex;flex-direction:column;gap:6px;max-width:520px;">
         ${sTypes.map(function(t){ return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;background:var(--bg);border-radius:var(--r-sm);"><span style="font-size:13px;">'+t+'</span>'+pairSelect(t)+'</div>'; }).join('')}
       </div>
-      <p style="font-size:11.5px;color:var(--text3);margin-top:8px;">These are defaults — you can override the template for any session when building a specific induction plan.</p>
+      <p style="font-size:11.5px;color:var(--text3);margin-top:8px;">Invite templates (create with format "Invite"). Override per session when building a plan.</p>
     </div>`;
     return;
   }
