@@ -9919,12 +9919,14 @@ function openInductionPlanner(personId) {
   };
 
   var sessionRows = (plan.sessions||[]).map(function(s, i){
-    return '<div style="display:grid;grid-template-columns:1fr 1.2fr 0.8fr 1fr 1.2fr auto;gap:6px;align-items:center;padding:8px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
-      + '<select onchange="_indSet('+i+',\'type\',this.value)" style="font-size:11.5px;">'+sTypes.map(function(t){ return '<option'+(s.type===t?' selected':'')+'>'+t+'</option>'; }).join('')+'</select>'
-      + '<select onchange="_indSet('+i+',\'person\',this.value)" style="font-size:11.5px;">'+personOptions(s.person)+'</select>'
-      + '<input type="date" value="'+(s.date||'')+'" onchange="_indSet('+i+',\'date\',this.value)" style="font-size:11px;">'
-      + '<input value="'+(s.location||'').replace(/"/g,'&quot;')+'" placeholder="Location" onchange="_indSet('+i+',\'location\',this.value)" style="font-size:11px;">'
-      + '<select onchange="_indSet('+i+',\'template\',this.value)" style="font-size:11.5px;">'+tplOptions(s.template)+'</select>'
+    return '<div style="display:grid;grid-template-columns:1fr 1.1fr 0.75fr 0.55fr 0.5fr 0.9fr 1fr auto;gap:5px;align-items:center;padding:8px;background:var(--bg);border-radius:var(--r-sm);margin-bottom:6px;">'
+      + '<select onchange="_indSet('+i+',\'type\',this.value)" style="font-size:11px;">'+sTypes.map(function(t){ return '<option'+(s.type===t?' selected':'')+'>'+t+'</option>'; }).join('')+'</select>'
+      + '<select onchange="_indSet('+i+',\'person\',this.value)" style="font-size:11px;">'+personOptions(s.person)+'</select>'
+      + '<input type="date" value="'+(s.date||'')+'" onchange="_indSet('+i+',\'date\',this.value)" style="font-size:10.5px;">'
+      + '<input type="time" value="'+(s.time||'')+'" onchange="_indSet('+i+',\'time\',this.value)" title="Start time" style="font-size:10.5px;">'
+      + '<input type="number" min="5" step="5" value="'+(s.duration||30)+'" onchange="_indSet('+i+',\'duration\',this.value)" title="Minutes" style="font-size:10.5px;">'
+      + '<input value="'+(s.location||'').replace(/"/g,'&quot;')+'" placeholder="Location" onchange="_indSet('+i+',\'location\',this.value)" style="font-size:10.5px;">'
+      + '<select onchange="_indSet('+i+',\'template\',this.value)" style="font-size:11px;">'+tplOptions(s.template)+'</select>'
       + '<button onclick="_indRemove('+i+')" style="border:none;background:none;color:var(--red);cursor:pointer;">✕</button>'
       + '</div>';
   }).join('');
@@ -9937,14 +9939,14 @@ function openInductionPlanner(personId) {
     + '<div class="modal-title">Induction plan — '+ (getEntityDisplayName(p,pfDefs)||'') +'</div>'
     + '<p style="font-size:12.5px;color:var(--text2);margin:0 0 12px;">Add induction sessions. Each pairs a stakeholder with a session type and its own template (defaults from Settings, override here).</p>'
     + (planTpls.length ? '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;"><span style="font-size:12px;color:var(--text3);">Apply template:</span><select id="indApplyTpl" style="font-size:12px;"><option value="">— Choose —</option>'+planTpls.map(function(t,i){ return '<option value="'+i+'">'+t.name+'</option>'; }).join('')+'</select><button class="btn btn-sm" onclick="applyInductionTemplate()">Apply</button></div>' : '')
-    + '<div style="display:grid;grid-template-columns:1fr 1.2fr 0.8fr 1fr 1.2fr auto;gap:6px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:0 8px 4px;"><span>Session type</span><span>Who with</span><span>Date</span><span>Location</span><span>Invite template</span><span></span></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1.1fr 0.75fr 0.55fr 0.5fr 0.9fr 1fr auto;gap:5px;font-size:9.5px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:0 8px 4px;"><span>Type</span><span>Who with</span><span>Date</span><span>Time</span><span>Mins</span><span>Location</span><span>Invite template</span><span></span></div>'
     + '<div id="indSessions">'+ (sessionRows || '<div style="font-size:12.5px;color:var(--text3);font-style:italic;padding:8px;">No sessions yet.</div>') +'</div>'
     + '<div style="display:flex;gap:8px;margin-top:8px;"><button class="btn btn-sm" onclick="_indAdd()">+ Add session</button><button class="btn btn-sm" onclick="saveInductionAsTemplate()">Save as plan template</button></div>'
     + '<div class="modal-footer" style="flex-wrap:wrap;gap:6px;">'
     + '<button class="btn" onclick="document.getElementById(\'inductionModal\').remove()">Close</button>'
     + '<div style="flex:1;"></div>'
     + '<button class="btn" onclick="generateWelcomeEmail()">✉ Welcome email</button>'
-    + '<button class="btn" onclick="generateInductionICS()">📅 Calendar invites (.zip)</button>'
+    + '<button class="btn" onclick="generateInductionICS()">📅 Calendar invites (.ics)</button>'
     + '<button class="btn btn-primary" onclick="generateInductionSchedule()">📄 Schedule document</button>'
     + '</div></div>';
   modal.classList.add('open');
@@ -10030,76 +10032,73 @@ function generateWelcomeEmail() {
   toast('Welcome email generated — to new starter, cc manager');
 }
 function generateInductionICS() {
-  ensureDocxLibs(function(){
-    var pid = window._indPersonId;
-    var newStarter = getPeople().find(function(x){ return x.id===pid; });
-    var pfDefs = getProfileFields();
-    var plan = getInduction(pid);
-    var starterName = getEntityDisplayName(newStarter, pfDefs);
-    var sessions = (plan.sessions||[]);
-    if (!sessions.length) { alert('Add sessions first.'); return; }
-    if (!window.PizZip) { alert('Calendar library not loaded — try again.'); return; }
-    var saved = fieldValues;
-    var zip = new window.PizZip();
-    // Replace non-ASCII (em-dash, smart quotes) with ASCII equivalents — strict parsers reject them
-    var asciiClean = function(t){
-      return String(t||'')
-        .replace(/[—–]/g,'-').replace(/['']/g,"'").replace(/[""]/g,'"').replace(/…/g,'...')
-        .replace(/[^\x00-\x7F]/g,''); // drop any remaining non-ASCII
-    };
-    var esc = function(t){ return asciiClean(t).replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n'); };
-    // Fold lines to 74 chars per iCal spec (a leading space continues the previous line)
-    var fold = function(line){
-      if (line.length <= 74) return line;
-      var out = line.slice(0,74), rest = line.slice(74);
-      while (rest.length > 73) { out += '\r\n ' + rest.slice(0,73); rest = rest.slice(73); }
-      out += '\r\n ' + rest;
-      return out;
-    };
-    sessions.forEach(function(s, i){
-      var ctx = _indSessionValues(s, newStarter, pfDefs);
-      var stakeName = ctx.stake ? getEntityDisplayName(ctx.stake, pfDefs) : (s.type||'Induction');
-      // Fill the invite template body as the description
-      var descBody = '';
-      var tpl = _indSessionTemplate(s);
-      if (tpl && tpl.indexOf('tpl:')===0) {
-        var t = data.templates.find(function(x){ return x.id===tpl.slice(4); });
-        if (t) { fieldValues = ctx.vals; var h = outlookBody(t, true); descBody = h.replace(/<\/(p|div|tr|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{3,}/g,'\n\n').trim(); }
-      }
-      if (!descBody) descBody = s.type + ' — induction session for ' + starterName + (ctx.stake?(' with '+stakeName):'');
-      var summary = 'Induction: ' + s.type + ' — ' + starterName + (ctx.stake?(' with '+stakeName):'');
-      var attendees = [];
-      if (newStarter.pf_email) attendees.push(newStarter.pf_email);
-      if (ctx.stake && ctx.stake.pf_email) attendees.push(ctx.stake.pf_email);
-      var stamp = new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
-      var startDate = s.date || new Date().toISOString().slice(0,10);
-      var startYmd = startDate.replace(/-/g,'');
-      var endObj = new Date(startDate+'T00:00:00'); endObj.setDate(endObj.getDate()+1);
-      var endYmd = endObj.getFullYear()+('0'+(endObj.getMonth()+1)).slice(-2)+('0'+endObj.getDate()).slice(-2);
-      var lines = [
-        'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//ER Adviser//Induction//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','BEGIN:VEVENT',
-        'UID:ind-'+Date.now()+'-'+i+'@eradviser',
-        'DTSTAMP:'+stamp,
-        'DTSTART;VALUE=DATE:'+startYmd,
-        'DTEND;VALUE=DATE:'+endYmd,
-        fold('SUMMARY:'+esc(summary))
-      ];
-      if (s.location) lines.push(fold('LOCATION:'+esc(s.location)));
-      lines.push(fold('DESCRIPTION:'+esc(descBody)));
-      attendees.forEach(function(a){ lines.push(fold('ATTENDEE;RSVP=TRUE:mailto:'+a)); });
-      lines.push('STATUS:CONFIRMED','END:VEVENT','END:VCALENDAR');
-      var ics = lines.join('\r\n') + '\r\n';
-      var fname = asciiClean(s.type+' - '+stakeName).replace(/[^\w \-]/g,'').trim() + '.ics';
-      zip.file(fname, ics);
-    });
-    fieldValues = saved;
-    var blob = zip.generate({ type:'blob', mimeType:'application/zip' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a'); a.href=url; a.download = 'Induction invites - '+starterName+'.zip';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-    toast('Calendar invites downloaded — open each .ics in your scheduler to set times & send');
+  var pid = window._indPersonId;
+  var newStarter = getPeople().find(function(x){ return x.id===pid; });
+  var pfDefs = getProfileFields();
+  var plan = getInduction(pid);
+  var starterName = getEntityDisplayName(newStarter, pfDefs);
+  var sessions = (plan.sessions||[]);
+  if (!sessions.length) { alert('Add sessions first.'); return; }
+  var saved = fieldValues;
+  var asciiClean = function(t){
+    return String(t||'').replace(/[\u2014\u2013]/g,'-').replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/\u2026/g,'...').replace(/[^\x00-\x7F]/g,'');
+  };
+  var esc = function(t){ return asciiClean(t).replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n'); };
+  var count = 0;
+  sessions.forEach(function(s, i){
+    var ctx = _indSessionValues(s, newStarter, pfDefs);
+    var stakeName = ctx.stake ? getEntityDisplayName(ctx.stake, pfDefs) : (s.type||'Induction');
+    var descBody = '';
+    var tpl = _indSessionTemplate(s);
+    if (tpl && tpl.indexOf('tpl:')===0) {
+      var t = data.templates.find(function(x){ return x.id===tpl.slice(4); });
+      if (t) { fieldValues = ctx.vals; var h = outlookBody(t, true); descBody = h.replace(/<\/(p|div|tr|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\n{3,}/g,'\n\n').trim(); }
+    }
+    if (!descBody) descBody = s.type + ' - induction session for ' + starterName + (ctx.stake?(' with '+stakeName):'');
+    var summary = 'Induction: ' + s.type + ' - ' + starterName + (ctx.stake?(' with '+stakeName):'');
+    var attendees = [];
+    if (newStarter.pf_email) attendees.push(newStarter.pf_email);
+    if (ctx.stake && ctx.stake.pf_email) attendees.push(ctx.stake.pf_email);
+    var stamp = new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
+    var dtLines;
+    if (s.date && s.time) {
+      // Timed event (floating local time — user's scheduler applies their timezone)
+      var startLocal = s.date.replace(/-/g,'') + 'T' + s.time.replace(':','') + '00';
+      var dur = (+s.duration || 30);
+      var sd = new Date(s.date+'T'+s.time+':00'); sd.setMinutes(sd.getMinutes()+dur);
+      var endLocal = sd.getFullYear()+('0'+(sd.getMonth()+1)).slice(-2)+('0'+sd.getDate()).slice(-2)+'T'+('0'+sd.getHours()).slice(-2)+('0'+sd.getMinutes()).slice(-2)+'00';
+      dtLines = ['DTSTART:'+startLocal, 'DTEND:'+endLocal];
+    } else {
+      var sdate = s.date || new Date().toISOString().slice(0,10);
+      var eObj = new Date(sdate+'T00:00:00'); eObj.setDate(eObj.getDate()+1);
+      var eYmd = eObj.getFullYear()+('0'+(eObj.getMonth()+1)).slice(-2)+('0'+eObj.getDate()).slice(-2);
+      dtLines = ['DTSTART;VALUE=DATE:'+sdate.replace(/-/g,''), 'DTEND;VALUE=DATE:'+eYmd];
+    }
+    var lines = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//ERAdviser//Induction//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','BEGIN:VEVENT',
+      'UID:ind-'+Date.now()+'-'+i+'@eradviser','DTSTAMP:'+stamp]
+      .concat(dtLines)
+      .concat(['SUMMARY:'+esc(summary)]);
+    if (s.location) lines.push('LOCATION:'+esc(s.location));
+    lines.push('DESCRIPTION:'+esc(descBody));
+    attendees.forEach(function(a){ lines.push('ATTENDEE;RSVP=TRUE:mailto:'+a); });
+    lines.push('ORGANIZER:mailto:'+(appSettings.adviserEmail||'noreply@eradviser.local'));
+    lines.push('STATUS:CONFIRMED','END:VEVENT','END:VCALENDAR');
+    var ics = lines.join('\r\n') + '\r\n';
+    var fname = asciiClean(s.type+' - '+stakeName).replace(/[^\w \-]/g,'').trim() + '.ics';
+    // Download each as an individual .ics (no zip) so it opens directly
+    (function(fn, content, delay){
+      setTimeout(function(){
+        var blob = new Blob(['\ufeff'.slice(0,0) + content], { type: 'text/calendar;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url; a.download = fn;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 500);
+      }, delay);
+    })(fname, ics, i*350);
+    count++;
   });
+  fieldValues = saved;
+  toast('Downloading '+count+' calendar file'+(count>1?'s':'')+' — double-click each to open in Outlook');
 }
 function generateInductionSchedule() {
   var pid = window._indPersonId;
