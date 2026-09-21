@@ -3718,7 +3718,7 @@ function ensureDocxLibs(cb) {
 }
 
 // Upload a .docx file → store it (base64) as a Word template
-function uploadWordTemplate(fileInput) {
+function uploadWordTemplate(fileInput, replaceId) {
   var file = fileInput.files && fileInput.files[0];
   if (!file) return;
   if (!/\.docx$/i.test(file.name)) { alert('Please upload a .docx file (Word). Old .doc format is not supported.'); return; }
@@ -3726,13 +3726,25 @@ function uploadWordTemplate(fileInput) {
   var reader = new FileReader();
   reader.onload = function(e) {
     var b64 = e.target.result.split(',')[1]; // strip data: prefix
-    var cat = prompt('Category for this template (e.g. Recruitment, Onboarding & Offboarding, General):', 'General') || 'General';
     var list = getWordTemplates();
+    if (replaceId) {
+      // Replace the .docx in place — keep id, name, category, nameTemplate
+      var wt = list.find(function(t){ return t.id === replaceId; });
+      if (wt) { wt.data = b64; wt.fileName = file.name; wt.uploaded = todayStr(); }
+      saveWordTemplates(list);
+      fileInput.value = '';
+      toast('Template file replaced');
+      if (typeof renderSidebar === 'function') renderSidebar();
+      selectWordTemplate(replaceId);
+      return;
+    }
+    var cat = prompt('Category for this template (e.g. Recruitment, Onboarding & Offboarding, General):', 'General') || 'General';
     list.push({
       id: 'wt' + Date.now(),
       name: file.name.replace(/\.docx$/i, ''),
       fileName: file.name,
       category: cat,
+      nameTemplate: '',
       data: b64,
       uploaded: todayStr()
     });
@@ -3879,12 +3891,21 @@ function filterWMergeList(q){ q=(q||'').toLowerCase(); document.querySelectorAll
 function runWordMerge(wtId) {
   var idxs = Array.from(document.querySelectorAll('.wmerge-check:checked')).map(function(cb){ return +cb.getAttribute('data-idx'); });
   if (!idxs.length) { alert('Select at least one recipient.'); return; }
+  var wt = getWordTemplates().find(function(t){ return t.id === wtId; });
+  var namePattern = (wt && wt.nameTemplate) ? wt.nameTemplate : '';
   var saved = fieldValues;
   idxs.forEach(function(idx, i){
     var r = _mergeRecipients[idx];
     if (!r) return;
     var vals = resolveEntityFields(r.entity, r.entityType);
-    setTimeout(function(){ mergeWordDoc(wtId, vals, r.name); }, i * 500);
+    // Build the output filename from the pattern (fields filled), else fall back to person name
+    var outName;
+    if (namePattern) {
+      outName = namePattern.replace(/\{\{([^}]+)\}\}/g, function(_,k){ return vals[k.trim().toUpperCase()] || vals[k.trim()] || ''; }).replace(/\s+/g,' ').trim();
+      outName = outName.replace(/[\/\\:*?"<>|]/g,'-'); // sanitise for filenames
+    }
+    if (!outName) outName = r.name;
+    setTimeout(function(){ mergeWordDoc(wtId, vals, outName); }, i * 500);
   });
   fieldValues = saved;
   document.getElementById('wmergeModal').remove();
@@ -3933,9 +3954,21 @@ function selectWordTemplate(id) {
         <button class="btn btn-primary" onclick="openWordMergePicker('${wt.id}')">Generate for selected people</button>
       </div>
 
+      <div style="background:var(--bg);border-radius:var(--r-lg);padding:18px 20px;margin-bottom:16px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Output file name</div>
+        <p style="font-size:12.5px;color:var(--text2);margin:0 0 10px;line-height:1.55;">Name each generated file using fields, e.g. <code>Contract - {{PREFERRED NAME}} {{SURNAME}}</code>. Leave blank to use the person's name.</p>
+        <div style="display:flex;gap:8px;">
+          <input id="wtNamePattern" value="${(wt.nameTemplate||'').replace(/"/g,'&quot;')}" placeholder="e.g. Contract - {{PREFERRED NAME}} {{SURNAME}}" style="flex:1;font-family:monospace;font-size:12.5px;">
+          <button class="btn btn-sm btn-primary" onclick="saveWordNamePattern('${wt.id}')">Save</button>
+        </div>
+        <div style="font-size:10.5px;color:var(--text3);margin-top:6px;">Available: ${getProfileFields().slice(0,8).map(function(f){return '<code style="cursor:pointer;color:var(--teal);" onclick="var i=document.getElementById(\'wtNamePattern\');i.value+=\'{{'+f.label.toUpperCase()+'}}\';">{{'+f.label.toUpperCase()+'}}</code>';}).join(' ')}</div>
+      </div>
+
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-sm" onclick="copyPlaceholderList()">⧉ Copy placeholder list</button>
         <button class="btn btn-sm" onclick="downloadWordTemplateOriginal('${wt.id}')">⬇ Download original</button>
+        <button class="btn btn-sm" onclick="renameWordTemplate('${wt.id}')">✎ Rename</button>
+        <label class="btn btn-sm" style="cursor:pointer;">⟳ Replace file<input type="file" accept=".docx" onchange="uploadWordTemplate(this,'${wt.id}')" style="display:none;"></label>
         <button class="btn btn-sm" onclick="changeWordTemplateCategory('${wt.id}')">Change category</button>
         <button class="btn btn-sm" onclick="deleteWordTemplate('${wt.id}');showEmpty();" style="color:var(--red);margin-left:auto;">Delete template</button>
       </div>
@@ -3959,6 +3992,22 @@ function changeWordTemplateCategory(id) {
   if (!wt) return;
   var cat = prompt('Category:', wt.category || 'General');
   if (cat) { wt.category = cat; saveWordTemplates(list); renderSidebar(); selectWordTemplate(id); }
+}
+function saveWordNamePattern(id) {
+  var list = getWordTemplates();
+  var wt = list.find(function(t){ return t.id === id; });
+  if (!wt) return;
+  var el = document.getElementById('wtNamePattern');
+  wt.nameTemplate = el ? el.value.trim() : '';
+  saveWordTemplates(list);
+  toast('Output name saved');
+}
+function renameWordTemplate(id) {
+  var list = getWordTemplates();
+  var wt = list.find(function(t){ return t.id === id; });
+  if (!wt) return;
+  var nm = prompt('Template name:', wt.name || '');
+  if (nm && nm.trim()) { wt.name = nm.trim(); saveWordTemplates(list); renderSidebar(); selectWordTemplate(id); }
 }
 
 // Word templates manager (opens from the Templates section)
