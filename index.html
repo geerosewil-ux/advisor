@@ -3494,6 +3494,12 @@ function injectOrgFields() {
   if (s.adviserTitle && !fieldValues['YOUR TITLE']) fieldValues['YOUR TITLE'] = s.adviserTitle;
   if (s.adviserEmail && !fieldValues['ER EMAIL']) fieldValues['ER EMAIL'] = s.adviserEmail;
   if (!fieldValues['REFERENCE CHECK TABLE']) fieldValues['REFERENCE CHECK TABLE'] = renderReferenceCheckTable();
+  // Dynamic today's date
+  var _todayISO = new Date().toISOString().slice(0,10);
+  fieldValues['TODAY'] = formatDateValue(_todayISO);
+  fieldValues['TODAYS DATE'] = formatDateValue(_todayISO);
+  fieldValues["TODAY'S DATE"] = formatDateValue(_todayISO);
+  fieldValues['DATE'] = formatDateValue(_todayISO);
   if (s.orgPhone && !fieldValues['ORGANISATION PHONE']) fieldValues['ORGANISATION PHONE'] = s.orgPhone;
   if (s.orgABN && !fieldValues['ABN']) fieldValues['ABN'] = s.orgABN;
   // Full org address for letterheads
@@ -5567,6 +5573,11 @@ function resolveEntityFields(entity, entityType) {
   if (s.adviserEmail) { values['ER EMAIL'] = s.adviserEmail; }
   // Reference check table (always available)
   values['REFERENCE CHECK TABLE'] = renderReferenceCheckTable();
+  var _todayISO2 = new Date().toISOString().slice(0,10);
+  values['TODAY'] = formatDateValue(_todayISO2);
+  values['TODAYS DATE'] = formatDateValue(_todayISO2);
+  values["TODAY'S DATE"] = formatDateValue(_todayISO2);
+  values['DATE'] = formatDateValue(_todayISO2);
 
   // Pronoun expansion
   var pronounVal = entity.pf_pronouns || entity.cand_pronouns || values['PRONOUNS'] || '';
@@ -7634,6 +7645,9 @@ function getAllPlaceholders() {
   add('Ordinary Hours', 'Schedule', 'text');
   add('Work Schedule', 'Schedule', 'schedule');
   add('Work Schedule Summary', 'Schedule', 'text');
+  // Dynamic date placeholders
+  add("Today", 'Dates', 'text');
+  add("Todays Date", 'Dates', 'text');
   // Recruitment placeholders
   add('Applicant Name', 'Recruitment', 'text');
   add('One Up Manager', 'Recruitment', 'text');
@@ -11454,21 +11468,25 @@ function showTopicDetail(topic) {
 
 // ── STEP EDITOR ───────────────────────────────────────────────────────────
 function openStepEditor(journeyId, stageId, stepId) {
-  // Attach journeyId/stageId to step for context if not already there
-  const step = getStep(journeyId, stageId, stepId);
-  if (!step) {
-    // Try to find step across all journeys/stages
-    for (const [jId, j] of Object.entries(LIFECYCLE_JOURNEYS)) {
-      for (const st of j.stages) {
-        const found = getStageSteps(jId, st.id).find(s => s.id === stepId);
-        if (found) {
-          openStepEditor(jId, st.id, stepId);
-          return;
-        }
-      }
-    }
-    toast('Step not found'); return;
+  // Find the step within its stage's steps
+  var step = null;
+  if (journeyId && stageId) {
+    step = getStageSteps(journeyId, stageId).find(function(s){ return s.id === stepId; });
   }
+  if (!step) {
+    // Search across all journeys/stages (custom + built-in)
+    var journeys = (typeof LIFECYCLE_JOURNEYS !== 'undefined') ? LIFECYCLE_JOURNEYS : {};
+    var found = false;
+    Object.keys(journeys).forEach(function(jId){
+      if (found) return;
+      (journeys[jId].stages||[]).forEach(function(st){
+        if (found) return;
+        var s = getStageSteps(jId, st.id).find(function(x){ return x.id === stepId; });
+        if (s) { journeyId = jId; stageId = st.id; step = s; found = true; }
+      });
+    });
+  }
+  if (!step) { toast('Step not found'); return; }
 
   editingStepCtx = { journeyId, stageId, stepId };
   document.getElementById('stepModalTitle').textContent = 'Edit Step — ' + step.title;
@@ -14981,10 +14999,11 @@ function progressCandidateToOnboarding(roleId, candId) {
     }
   }
 
-  // 5) Silent create — confirm with toast, refresh views
+  // 5) Confirm, refresh, and open the People profile form pre-filled to complete it
   if (document.getElementById('pipelineDetailModal')) document.getElementById('pipelineDetailModal').classList.remove('open');
-  if (currentTab === 'recruitment' || lcView === 'recruitment') renderRecruitment();
-  toast('✓ ' + candName + ' onboarded — case created, profile added, role archived');
+  if (typeof addHistory === 'function') addHistory(newPerson.id, 'Onboarding started', 'Converted from candidate; onboarding case created');
+  toast('✓ ' + candName + ' onboarded — complete their profile');
+  if (typeof openPersonModal === 'function') setTimeout(function(){ openPersonModal(newPerson.id); }, 150);
 }
 
 // Legacy entry points now route to the candidate-based flow.
